@@ -1,0 +1,10 @@
+/target
+**/target
+
+# Secrets & local state — never commit (config holds live [api_keys]).
+config.ini
+*.sqlite
+*.sqlite-journal
+*audit*.log
+badbitch2_debug.log
+case_docs/

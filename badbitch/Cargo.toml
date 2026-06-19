@@ -1,0 +1,28 @@
+[package]
+name = "badbitch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "badbitch"
+path = "src/main.rs"
+
+[dependencies]
+badbitch-macros = { path = "../badbitch-macros" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "rt", "process", "time", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "socks", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+regex = "1.12"
+configparser = "3"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+rustyline = "14"
+urlencoding = "2"
+dirs = "5"
+base64 = "0.22"
