@@ -155,6 +155,8 @@ pub fn toolset() -> ToolRouter {
         // ── Property ──
         .route(property::FindCountyPortalsTool)
         .route(property::ArcgisQueryTool)
+        .route(property::AttomPropertyTool)
+        .route(property::RegridParcelTool)
         // ── Infra / domain ──
         .route(infra::ShodanTool)
         .route(infra::CensysTool)

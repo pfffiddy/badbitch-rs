@@ -102,6 +102,8 @@ async fn print_list_tools(cfg: &Config) {
         ("rocketreach", "rocketreach"),
         ("dehashed", "dehashed_key"),
         ("breach_check", "hibp"),
+        ("attom_property", "attom"),
+        ("regrid_parcel", "regrid"),
     ];
     for n in names {
         let status: String = if let Some((_, key)) = key_tools.iter().find(|(t, _)| *t == n.as_str()) {
