@@ -39,6 +39,25 @@ pub fn save_dossier(db_path: &Path, property_id: &str, address: &str, dossier_md
     }
 }
 
+/// Load the raw case fields (address, dossier_md, updated) without Markdown re-formatting.
+/// Used by exporters (e.g. Maltego/Graphviz) that need the body, not a display string.
+pub fn load_raw(db_path: &Path, property_id: &str) -> rusqlite::Result<Option<(String, String, String)>> {
+    let conn = open(db_path)?;
+    Ok(conn
+        .query_row(
+            "SELECT address,dossier_md,updated FROM cases WHERE property_id=?1",
+            rusqlite::params![property_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0).unwrap_or_default(),
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .ok())
+}
+
 /// `load_dossier` (badbitch2.py:282).
 pub fn load_dossier(db_path: &Path, property_id: &str) -> String {
     match (|| -> rusqlite::Result<Option<(String, String, String)>> {

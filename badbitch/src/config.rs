@@ -38,6 +38,12 @@ pub struct Config {
     pub db_file: PathBuf,
     pub log_file: PathBuf,
     pub api_keys: HashMap<String, String>,
+    /// [osint] verbose = true — surface per-tool timing, retry notices, rate-limit waits.
+    pub verbose: bool,
+    /// [osint] summary = true — generate a 3-5 bullet TL;DR after each turn.
+    pub summarize: bool,
+    /// UA rotation pool for per-request header variation (badbitch2.py:129).
+    pub ua_pool: Vec<String>,
 }
 
 fn home() -> PathBuf {
@@ -138,7 +144,22 @@ impl Config {
             db_file: rs_db_path(&case_db),
             log_file: expand(&log_file),
             api_keys,
+            verbose: getb("verbose", false),
+            summarize: getb("summary", true),
+            ua_pool: vec![
+                UA.to_string(),
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".into(),
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15".into(),
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0".into(),
+            ],
         }
+    }
+
+    /// Pick a random UA from the pool for per-request rotation (badbitch2.py:137 `_pick_ua`).
+    pub fn pick_ua(&self) -> &str {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos() as usize;
+        &self.ua_pool[t % self.ua_pool.len()]
     }
 
     /// `_key()` (badbitch2.py:153): read an API key, returning "" if absent.

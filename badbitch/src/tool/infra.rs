@@ -188,17 +188,17 @@ pub async fn intelx(ctx: ToolContext, input: IntelxInput) -> String {
             &headers,
         )
         .await;
-        if let Ok(r) = res {
-            if let Ok(jr) = serde_json::from_str::<Value>(&r.text().await.unwrap_or_default()) {
-                if let Some(recs) = jr.get("records").and_then(|v| v.as_array()) {
-                    if !recs.is_empty() {
-                        records = recs.clone();
-                    }
-                }
-                let status = jr.get("status").and_then(|v| v.as_i64()).unwrap_or(-1);
-                if (status == 1 || status == 2) && !records.is_empty() {
-                    break;
-                }
+        if let Ok(r) = res
+            && let Ok(jr) = serde_json::from_str::<Value>(&r.text().await.unwrap_or_default())
+        {
+            if let Some(recs) = jr.get("records").and_then(|v| v.as_array())
+                && !recs.is_empty()
+            {
+                records = recs.clone();
+            }
+            let status = jr.get("status").and_then(|v| v.as_i64()).unwrap_or(-1);
+            if (status == 1 || status == 2) && !records.is_empty() {
+                break;
             }
         }
     }
@@ -227,7 +227,7 @@ pub struct DnsReconInput {
     name = "dns_recon",
     description = "Resolve DNS records (A/AAAA/MX/NS/TXT) + WHOIS registration for a domain using local dig/whois. Fast structured infrastructure footprint. Returns text."
 )]
-pub async fn dns_recon(ctx: ToolContext, input: DnsReconInput) -> String {
+pub async fn dns_recon(_ctx: ToolContext, input: DnsReconInput) -> String {
     let domain = input.domain.trim();
     let mut out: Vec<String> = Vec::new();
     if shell::have("dig").await {
@@ -249,25 +249,25 @@ pub async fn dns_recon(ctx: ToolContext, input: DnsReconInput) -> String {
             Err(e) => out.push(format!("[resolve error] {e}")),
         }
     }
-    if shell::have("whois").await {
-        if let Ok(o) = shell::run("whois", &[domain], 30).await {
-            let keys = [
-                "Registrar:", "Creation Date:", "Updated Date:", "Registry Expiry",
-                "Registrant", "Name Server:", "Domain Status:",
-            ];
-            let mut seen = std::collections::BTreeSet::new();
-            let wl: Vec<String> = o
-                .stdout
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| keys.iter().any(|k| l.starts_with(k)))
-                .filter(|l| seen.insert(l.clone()))
-                .collect();
-            if wl.is_empty() {
-                out.push("[whois: no headline fields]".to_string());
-            } else {
-                out.push(format!("\n[whois]\n{}", crate::util::truncate_chars(&wl.join("\n"), 2000)));
-            }
+    if shell::have("whois").await
+        && let Ok(o) = shell::run("whois", &[domain], 30).await
+    {
+        let keys = [
+            "Registrar:", "Creation Date:", "Updated Date:", "Registry Expiry",
+            "Registrant", "Name Server:", "Domain Status:",
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        let wl: Vec<String> = o
+            .stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| keys.iter().any(|k| l.starts_with(k)))
+            .filter(|l| seen.insert(l.clone()))
+            .collect();
+        if wl.is_empty() {
+            out.push("[whois: no headline fields]".to_string());
+        } else {
+            out.push(format!("\n[whois]\n{}", crate::util::truncate_chars(&wl.join("\n"), 2000)));
         }
     }
     if out.is_empty() {

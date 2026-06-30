@@ -19,9 +19,14 @@ use crate::config::Config;
 
 pub mod corpus;
 pub mod dossier;
+pub mod entity;
 pub mod geo;
+pub mod infra;
+pub mod links;
+pub mod maltego;
 pub mod people;
 pub mod property;
+pub mod shell;
 pub mod web;
 
 /// Wire description of a tool handed to the model (Ollama `tools[].function`).
@@ -117,24 +122,59 @@ where
     serde_json::to_value(schemars::schema_for!(T)).expect("schema generation should not fail")
 }
 
-/// The 16 live tools (badbitch2.py:1367 `TOOLS`), in the same order, with `recon_sweep`
-/// leading so the model gathers a corpus before sifting.
+/// Full toolset: Phase-1 (16 tools) + Phase-2 infra/entity + geo Phase-2 + shell/link tools.
+/// Mirrors badbitch2.py TOOLS + TOOLS.extend([...]) (lines 1367, 2787).
 pub fn toolset() -> ToolRouter {
     ToolRouter::new()
+        // ── Recon / corpus ──
         .route(web::ReconSweepTool)
         .route(web::WebSearchTool)
         .route(corpus::CollectTool)
         .route(corpus::QueryDocsTool)
         .route(corpus::ReadDocTool)
+        // ── Web fetch ──
         .route(web::FetchRenderedTool)
+        .route(links::FetchUrlTool)
+        .route(links::FetchJsonTool)
+        // ── People / social ──
         .route(people::PeopleSearchLinksTool)
         .route(people::SocialSearchLinksTool)
         .route(people::SherlockTool)
         .route(people::HoleheTool)
         .route(people::ExtractContactsTool)
+        // ── Entity / breach ──
+        .route(entity::TheharvesterTool)
+        .route(entity::PhoneinfogaTool)
+        .route(entity::DehashedTool)
+        .route(entity::RocketreachTool)
+        .route(entity::OpencorporatesTool)
+        .route(entity::BreachCheckTool)
+        // ── Geo ──
         .route(geo::GeocodeTool)
+        .route(geo::ImageryLinksTool)
+        .route(geo::SuncalcTool)
+        // ── Property ──
         .route(property::FindCountyPortalsTool)
         .route(property::ArcgisQueryTool)
+        .route(property::AttomPropertyTool)
+        .route(property::RegridParcelTool)
+        // ── Infra / domain ──
+        .route(infra::ShodanTool)
+        .route(infra::CensysTool)
+        .route(infra::DnsdumpsterTool)
+        .route(infra::VirustotalTool)
+        .route(infra::IntelxTool)
+        .route(infra::DnsReconTool)
+        // ── Wayback / dossier ──
         .route(web::WaybackTool)
         .route(dossier::SaveDossierTool)
+        .route(maltego::ExportToMaltegoTool)
+        // ── Links ──
+        .route(links::ReverseImageLinksTool)
+        .route(links::CrimeDataLinksTool)
+        .route(links::TorStatusTool)
+        // ── Shell ──
+        .route(shell::RunShellTool)
+        .route(shell::PythonEvalTool)
+        .route(shell::ExifMetadataTool)
 }

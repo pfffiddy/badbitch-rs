@@ -47,10 +47,10 @@ pub async fn theharvester(ctx: ToolContext, input: TheharvesterInput) -> String 
                 Some(data) => {
                     let mut slim = serde_json::Map::new();
                     for k in ["emails", "hosts", "ips", "people", "linkedin_people", "asns"] {
-                        if let Some(v) = data.get(k) {
-                            if !v.is_null() {
-                                slim.insert(k.to_string(), v.clone());
-                            }
+                        if let Some(v) = data.get(k)
+                            && !v.is_null()
+                        {
+                            slim.insert(k.to_string(), v.clone());
                         }
                     }
                     let val = if slim.is_empty() { data } else { Value::Object(slim) };

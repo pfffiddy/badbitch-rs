@@ -1,4 +1,7 @@
-//! Agent loop — ports `_run_turn` (badbitch2.py:1647) and `_preflight` (1797).
+//! Agent loop — ports `_run_turn` (badbitch2.py:1647), `_preflight` (1797), and
+//! `_summarize_turn` (badbitch2.py:1601).
+
+use std::time::Instant;
 
 use serde_json::Value;
 
@@ -43,6 +46,44 @@ async fn run_tool(router: &ToolRouter, ctx: &ToolContext, name: &str, args: Valu
     }
 }
 
+/// `_summarize_turn` (badbitch2.py:1601): one extra model call that distills the answer into
+/// a 3-5 bullet TL;DR header. Returns "" on failure or when the answer is too short/trivial.
+async fn summarize_turn(client: &OllamaClient, cfg: &Config, content: &str) -> String {
+    if !cfg.summarize || content.chars().count() < 400 || content.starts_with('[') {
+        return String::new();
+    }
+    let sm = vec![
+        ChatMessage::system(
+            "You compress an OSINT answer into a TL;DR. Output ONLY 3-5 terse bullet lines, \
+             each starting with '- ', capturing the key findings and any explicit gaps. \
+             No preamble, no heading, no closing remark. Keep each bullet under ~20 words.",
+        ),
+        ChatMessage::user(crate::util::truncate_chars(content, 6000)),
+    ];
+    let resp = match client.chat_no_tools(&sm, cfg).await {
+        Ok(r) => r,
+        Err(e) => {
+            debug::log(&format!("summary pass failed (non-fatal): {e}"));
+            return String::new();
+        }
+    };
+    let tldr = resp.message.content.trim().to_string();
+    if tldr.is_empty() {
+        return String::new();
+    }
+    let bullets: Vec<String> = tldr
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .map(|l| if l.starts_with(['-', '•', '*']) { l } else { format!("- {l}") })
+        .take(5)
+        .collect();
+    if bullets.is_empty() {
+        return String::new();
+    }
+    format!("═══ TL;DR ═══\n{}\n═════════════\n\n", bullets.join("\n"))
+}
+
 /// `_run_turn`: model + tool loop with iteration cap and optional continuations.
 pub async fn run_turn(
     client: &OllamaClient,
@@ -53,6 +94,8 @@ pub async fn run_turn(
 ) -> String {
     let specs = router.tool_specs();
     let mut continuations = 0usize;
+    let turn_t0 = Instant::now();
+    let mut tool_count = 0usize;
 
     loop {
         debug::log(&format!(
@@ -88,7 +131,12 @@ pub async fn run_turn(
                 println!("  → {}({})", name, shown(args));
                 debug::audit(&cfg.log_file, name, args);
                 debug::log(&format!("tool-call #{iters} {name} args={args}"));
+                let t0 = Instant::now();
                 let result = run_tool(router, ctx, name, args.clone()).await;
+                tool_count += 1;
+                if cfg.verbose {
+                    println!("    ⏱  {name} took {:.1}s", t0.elapsed().as_secs_f64());
+                }
                 debug::log(&format!("tool-result {name} -> {}", truncate_chars(&result, 2000)));
                 messages.push(ChatMessage::tool_result(
                     name,
@@ -125,6 +173,7 @@ pub async fn run_turn(
                 debug::audit(&cfg.log_file, name, args);
                 debug::log(&format!("tool-call (continuation {continuations}) {name} args={args}"));
                 let result = run_tool(router, ctx, name, args.clone()).await;
+                tool_count += 1;
                 debug::log(&format!("tool-result {name} -> {}", truncate_chars(&result, 2000)));
                 messages.push(ChatMessage::tool_result(
                     name,
@@ -146,7 +195,14 @@ pub async fn run_turn(
             content.chars().count(),
             truncate_chars(&content, 4000)
         ));
-        return content;
+        if cfg.verbose {
+            println!(
+                "  [turn done: {tool_count} tool call(s) in {:.1}s]",
+                turn_t0.elapsed().as_secs_f64()
+            );
+        }
+        let tldr = summarize_turn(client, cfg, &content).await;
+        return format!("{tldr}{content}");
     }
 }
 
