@@ -193,3 +193,42 @@ def graph_for_case(property_id: str, db_path: Optional[str] = None) -> Tuple[Lis
         return [], []
     ents = extract_entities(md)
     return ents, build_edges(ents, md)
+
+
+def all_cases(db_path: Optional[str] = None) -> List[Tuple[str, str]]:
+    """Return (property_id, dossier_md) for every saved case."""
+    path = db_path or default_db_path()
+    if not os.path.exists(path):
+        return []
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute("SELECT property_id, dossier_md FROM cases").fetchall()
+    finally:
+        conn.close()
+
+
+def neighbors_of(value: str, db_path: Optional[str] = None) -> List[Tuple[Entity, str, str]]:
+    """Find 1-hop neighbors of `value` across ALL saved cases. Returns a list of
+    (neighbor_entity, edge_label, property_id), deduped. Direction-agnostic — an entity
+    linked either to or from `value` counts as a neighbor."""
+    out: List[Tuple[Entity, str, str]] = []
+    seen = set()
+    needle = value.strip().lower()
+    if not needle:
+        return out
+    for pid, md in all_cases(db_path):
+        ents = extract_entities(md)
+        if not any(e.value.lower() == needle for e in ents):
+            continue
+        for edge in build_edges(ents, md):
+            if edge.src.value.lower() == needle:
+                nb = edge.tgt
+            elif edge.tgt.value.lower() == needle:
+                nb = edge.src
+            else:
+                continue
+            key = (nb.ty, nb.value, edge.label, pid)
+            if key not in seen:
+                seen.add(key)
+                out.append((nb, edge.label, pid))
+    return out

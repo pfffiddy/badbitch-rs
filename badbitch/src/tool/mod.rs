@@ -21,9 +21,11 @@ pub mod corpus;
 pub mod dossier;
 pub mod entity;
 pub mod geo;
+pub mod graph;
 pub mod infra;
 pub mod links;
 pub mod maltego;
+pub mod neo4j;
 pub mod people;
 pub mod property;
 pub mod shell;
@@ -169,6 +171,7 @@ pub fn toolset() -> ToolRouter {
         .route(web::WaybackTool)
         .route(dossier::SaveDossierTool)
         .route(maltego::ExportToMaltegoTool)
+        .route(neo4j::ExportToNeo4jTool)
         // ── Links ──
         .route(links::ReverseImageLinksTool)
         .route(links::CrimeDataLinksTool)
