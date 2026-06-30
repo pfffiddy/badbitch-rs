@@ -14,6 +14,7 @@ relationship model**.
 |------|---------|
 | `transforms/badbitch_common.py` | Entity + relationship extraction (a port of `badbitch/src/tool/maltego.rs`). No third-party deps. |
 | `transforms/badbitch_case_expand.py` | `BadbitchCaseExpand` — input a `property_id`, expands the saved case into a graph from the SQLite store. |
+| `transforms/badbitch_expand_entity.py` | `BadbitchExpandEntity` — input any indicator (email/domain/phone/IP/name), returns its 1-hop neighbors across **all** saved cases, each link labelled with the relationship + source `property_id`. |
 | `transforms/badbitch_extract_entities.py` | `BadbitchExtractEntities` — extracts entities from raw text (a paste, WHOIS blob, page dump). |
 | `project.py` | maltego-trx runner. |
 | `requirements.txt` | `maltego-trx`. |
@@ -59,6 +60,13 @@ then for each one:
 - Parameters: `project.py local BadbitchCaseExpand`
 - Working directory: the absolute path to `maltego_transforms/`
 
+**BadbitchExpandEntity**
+- Transform ID / display name: `badbitch.expand.entity` / *BadBitch: Expand Entity*
+- Input entity type: `maltego.Phrase` (or any entity carrying the indicator value)
+- Command: `python3`
+- Parameters: `project.py local BadbitchExpandEntity`
+- Working directory: the absolute path to `maltego_transforms/`
+
 **BadbitchExtractEntities**
 - Transform ID / display name: `badbitch.extract.entities` / *BadBitch: Extract Entities*
 - Input entity type: `maltego.Phrase`
@@ -77,14 +85,18 @@ hardcode the path by exporting it in a small wrapper script used as the Command.
 2. **Extract from text:** drop a **Phrase** entity, paste a fragment (WHOIS,
    page text), right-click → *BadBitch: Extract Entities*.
 
-## Relationship to `export_to_maltego`
+## Relationship to `export_to_maltego` / `export_to_neo4j`
 
-The Rust tool and these transforms are two front-ends to one model:
+The Rust tools and these transforms are front-ends to one shared model
+(`badbitch/src/tool/graph.rs` ↔ `badbitch_common.py`):
 
 - `export_to_maltego property_id="…"` → static `*.maltego.entities.csv`,
   `*.maltego.links.csv`, `*.graphviz.dot/.png` for import or sharing.
+- `export_to_neo4j property_id="…"` → a `*.neo4j.cypher` script of `MERGE`
+  statements for Neo4j link analysis.
 - These transforms → the same graph, built interactively inside Maltego, with
-  click-to-expand from a `property_id`.
+  click-to-expand from a `property_id` (or any indicator, via
+  `BadbitchExpandEntity`).
 
 Because `badbitch_common.py` mirrors `maltego.rs`, both paths yield the same
 entities and the same typed edges. If you change one extractor, change the

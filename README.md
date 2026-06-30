@@ -39,9 +39,12 @@ badbitch-rs/
 │       └── tool/          # the tools, grouped by domain
 │           ├── web.rs  corpus.rs  people.rs  entity.rs  infra.rs
 │           ├── geo.rs  property.rs  links.rs  shell.rs  dossier.rs
-│           └── maltego.rs   # Maltego/Graphviz export
+│           ├── graph.rs     # shared entity + relationship model
+│           └── maltego.rs  neo4j.rs   # graph exporters
 ├── badbitch-macros/       # #[tool(...)] proc-macro (schema + Tool impl)
-└── maltego_transforms/    # standalone maltego-trx local transforms (Python)
+├── maltego_transforms/    # standalone maltego-trx local transforms (Python)
+├── packaging/             # .deb maintainer scripts (postinst, badbitch-setup)
+└── scripts/               # build-deb.sh, install.sh
 ```
 
 ## Build & run
@@ -110,7 +113,8 @@ In the REPL, `/reset` clears history + collected docs; `exit`/`quit` leaves.
   `regrid_parcel`
 - **Infra / domain** — `shodan`, `censys`, `dnsdumpster`, `virustotal`,
   `intelx`, `dns_recon`
-- **Recovery / output** — `wayback`, `save_dossier`, `export_to_maltego`
+- **Recovery / output** — `wayback`, `save_dossier`, `export_to_maltego`,
+  `export_to_neo4j`
 - **Links** — `reverse_image_links`, `crime_data_links`, `tor_status`
 - **Shell** — `run_shell`, `python_eval`, `exif_metadata`
 
@@ -128,23 +132,52 @@ pub async fn my_tool(ctx: ToolContext, input: MyToolInput) -> String { /* … */
 
 Then add `.route(my_mod::MyToolTool)` in `tool::toolset()`.
 
-## Maltego / Graphviz export
+## Graph export (Maltego, Graphviz, Neo4j)
 
-`export_to_maltego property_id="<id>"` turns a saved case into:
-
-- `<stem>.maltego.entities.csv` — `Type,Value,Weight,Note` (Maltego CSV import)
-- `<stem>.maltego.links.csv` — typed source→target relationships with labels
-- `<stem>.graphviz.dot` — a labelled relationship graph
-- `<stem>.graphviz.png` — rendered if the `dot` CLI is installed (else skipped)
+All exporters read the same saved case and build one shared graph model
+(`badbitch/src/tool/graph.rs`), so they always agree — only the output differs.
 
 **Relationship model** (richer than a plain star): a **subject anchor** linking
 the primary person to every entity with a typed label; **derived `email→domain`**
 edges; and **`domain↔IP` co-location** edges for entities sharing a source line.
+Email local-parts are masked so they never leak in as Domain nodes.
+
+- `export_to_maltego property_id="<id>"` (optional `graphviz=false`) →
+  `<stem>.maltego.entities.csv`, `<stem>.maltego.links.csv`, and a Graphviz
+  `<stem>.graphviz.dot` (+ `.png` when the `dot` CLI is installed).
+- `export_to_neo4j property_id="<id>"` → `<stem>.neo4j.cypher`, idempotent
+  `MERGE` statements (nodes Person/Email/Phone/Domain/IPv4; relationships
+  `HAS_EMAIL`, `HAS_PHONE`, `ASSOCIATED_WITH`, `EMAIL_DOMAIN`, `CO_LOCATED`).
+  Load with `cypher-shell -f <file>`.
 
 For an interactive, click-to-expand workflow, `maltego_transforms/` ships
 standalone [maltego-trx](https://github.com/MaltegoTech/maltego-trx) **local
-transforms** that share the exact same model (a Python port of the Rust
-exporter). See `maltego_transforms/README.md`.
+transforms** sharing the exact same model (a Python port): expand a saved case,
+expand any indicator across all cases, or extract entities from pasted text. See
+`maltego_transforms/README.md`.
+
+## Packaging (.deb)
+
+Build a Debian/Ubuntu package that puts `badbitch` on `PATH` and ships a
+`badbitch-setup` helper:
+
+```bash
+./scripts/build-deb.sh                 # → target/deb/badbitch_<ver>_<arch>.deb
+sudo apt install ./target/deb/badbitch_*.deb
+badbitch-setup                         # installs Ollama, pulls the model, adds
+                                       # optional CLIs, writes the config
+```
+
+Or the one-shot from a source checkout (build → install → setup):
+
+```bash
+./scripts/install.sh
+```
+
+`badbitch-setup` honors `BADBITCH_MODEL=…` (override the model) and
+`BADBITCH_SKIP_MODEL=1` (skip the multi-GB pull). The `.deb` declares the
+apt-installable deps; Ollama, the model, SearXNG, and the pipx OSINT CLIs are
+handled by the setup step because they can't be clean apt dependencies.
 
 ## Development
 
