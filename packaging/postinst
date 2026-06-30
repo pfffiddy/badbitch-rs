@@ -1,0 +1,22 @@
+#!/bin/sh
+# Post-install: badbitch is now on PATH. The heavy, network-bound, per-user steps
+# (Ollama, the multi-GB model, optional CLIs, config) are deliberately left to
+# `badbitch-setup` so dpkg stays fast and side-effect-free.
+set -e
+case "$1" in
+  configure)
+    cat <<'EOF'
+
+  badbitch installed → run `badbitch` (or `badbitch --list-tools`).
+
+  Finish setup (Ollama + model + optional OSINT CLIs + config), as your normal user:
+
+      badbitch-setup
+
+  (override the model with  BADBITCH_MODEL=...  badbitch-setup,
+   or skip the big download with  BADBITCH_SKIP_MODEL=1  badbitch-setup)
+
+EOF
+    ;;
+esac
+exit 0
