@@ -107,7 +107,7 @@ async fn print_list_tools(cfg: &Config) {
     ];
     for n in names {
         let status: String = if let Some((_, key)) = key_tools.iter().find(|(t, _)| *t == n.as_str()) {
-            if cfg.key(key).is_empty() { format!("✗ no key ({key})") } else { format!("✓ key") }
+            if cfg.key(key).is_empty() { format!("✗ no key ({key})") } else { "✓ key".to_string() }
         } else {
             match n.as_str() {
             "sherlock" => {

@@ -23,6 +23,7 @@ pub mod entity;
 pub mod geo;
 pub mod infra;
 pub mod links;
+pub mod maltego;
 pub mod people;
 pub mod property;
 pub mod shell;
@@ -167,6 +168,7 @@ pub fn toolset() -> ToolRouter {
         // ── Wayback / dossier ──
         .route(web::WaybackTool)
         .route(dossier::SaveDossierTool)
+        .route(maltego::ExportToMaltegoTool)
         // ── Links ──
         .route(links::ReverseImageLinksTool)
         .route(links::CrimeDataLinksTool)

@@ -120,7 +120,7 @@ pub async fn tor_status(ctx: ToolContext, _input: TorStatusInput) -> String {
 
     // Check if SOCKS port is listening
     let listening = {
-        let host_port = proxy.splitn(2, "://").nth(1).unwrap_or(proxy.as_str());
+        let host_port = proxy.split_once("://").map(|x| x.1).unwrap_or(proxy.as_str());
         if let Some((host, port_str)) = host_port.rsplit_once(':') {
             if let Ok(port) = port_str.parse::<u16>() {
                 TcpStream::connect_timeout(
