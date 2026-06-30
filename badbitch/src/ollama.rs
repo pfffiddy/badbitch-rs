@@ -105,6 +105,41 @@ impl OllamaClient {
         &self.model
     }
 
+    /// Tool-free model call used by the TL;DR summarizer (`_summarize_turn`, badbitch2.py:1601).
+    /// Uses lower temperature for a more deterministic summary.
+    pub async fn chat_no_tools(
+        &self,
+        messages: &[ChatMessage],
+        cfg: &Config,
+    ) -> anyhow::Result<ChatResponse> {
+        let body = json!({
+            "model": self.model,
+            "messages": messages,
+            "stream": false,
+            "options": {
+                "num_ctx": cfg.num_ctx,
+                "temperature": 0.2,
+                "top_p": cfg.gen_top_p,
+                "repeat_penalty": cfg.gen_repeat,
+            },
+        });
+        let resp = self
+            .http
+            .post(format!("{}/api/chat", self.host))
+            .timeout(Duration::from_secs(120))
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("ollama HTTP {}: {}", status.as_u16(), text);
+        }
+        let parsed: ChatResponse = serde_json::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("ollama: bad response: {e}; body={}", &text))?;
+        Ok(parsed)
+    }
+
     /// One `ollama.chat` call (badbitch2.py:1653) with tools + sampling options.
     pub async fn chat(
         &self,

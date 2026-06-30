@@ -1,12 +1,13 @@
 //! Shared HTTP layer — ports `_http`/`_get` retry/backoff (badbitch2.py:188), `_rate_limit`
-//! (178), HTML `_extract` (361), `fetch_url`/`_fetch_url_full` (377/404), `fetch_json` (445).
+//! (178), HTML `_extract` (361), `fetch_url`/`_fetch_url_full` (377/404), `fetch_json` (445),
+//! and the disk fetch-cache (badbitch2.py:452-474).
 //!
 //! Tor routing (`_proxies`, 172) is applied once at client-build time in `main` (reqwest sets
 //! proxies per-client, not per-request), so there's nothing to thread through here.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
 use serde_json::Value;
@@ -180,14 +181,62 @@ fn decode_entities(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+// ── Disk fetch-cache (badbitch2.py:452-474) ──────────────────────────────────────────────
+// Cache cleaned page text by SHA-256(url) so repeated fetches of the same URL within a
+// session (or across sessions within the TTL) are free and polite to upstream servers.
+
+const FETCH_CACHE_TTL: u64 = 21_600; // 6 hours, matching Python default
+
+fn cache_dir() -> std::path::PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("badbitch2_fetch_cache")
+}
+
+fn cache_path(url: &str) -> std::path::PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut h);
+    let hex = format!("{:016x}", h.finish());
+    cache_dir().join(format!("{hex}.txt"))
+}
+
+fn cache_get(url: &str) -> Option<String> {
+    let p = cache_path(url);
+    let meta = std::fs::metadata(&p).ok()?;
+    let age = SystemTime::now()
+        .duration_since(meta.modified().ok()?)
+        .ok()?
+        .as_secs();
+    if age > FETCH_CACHE_TTL {
+        return None;
+    }
+    std::fs::read_to_string(&p).ok()
+}
+
+fn cache_put(url: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let p = cache_path(url);
+    let _ = std::fs::create_dir_all(cache_dir());
+    let _ = std::fs::write(p, text);
+}
+
 /// `_fetch_url_full` (badbitch2.py:377): plain GET + clean-extract, full text (no truncation).
-/// No curl_cffi impersonation fallback in Rust — note the limitation and suggest fetch_rendered.
+/// Results are disk-cached for FETCH_CACHE_TTL seconds to avoid re-tripping rate limits.
+/// No curl_cffi impersonation fallback in Rust — suggest fetch_rendered for JS sites.
 pub async fn fetch_url_full(client: &reqwest::Client, cfg: &Config, url: &str) -> String {
+    if let Some(cached) = cache_get(url) {
+        return cached;
+    }
     let mut note = String::new();
     if cfg.tor {
         note.push_str("[via Tor] ");
     }
-    let html = match get(client, cfg, url, &[], &[]).await {
+    // Use a random UA from the pool for rotation (badbitch2.py:137)
+    let ua = cfg.pick_ua().to_string();
+    let html = match get(client, cfg, url, &[], &[("User-Agent".into(), ua)]).await {
         Ok(resp) => {
             let code = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
@@ -213,11 +262,13 @@ pub async fn fetch_url_full(client: &reqwest::Client, cfg: &Config, url: &str) -
     if head.contains("captcha") || out.len() < 200 {
         note.push_str("Looks like a bot wall / JS page — consider fetch_rendered. ");
     }
-    if note.is_empty() {
+    let result = if note.is_empty() {
         out
     } else {
         format!("[{note}]\n{out}")
-    }
+    };
+    cache_put(url, &result);
+    result
 }
 
 /// `fetch_url` (badbitch2.py:404): truncated for inline use.

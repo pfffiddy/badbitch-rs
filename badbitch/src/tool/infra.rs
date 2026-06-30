@@ -227,7 +227,7 @@ pub struct DnsReconInput {
     name = "dns_recon",
     description = "Resolve DNS records (A/AAAA/MX/NS/TXT) + WHOIS registration for a domain using local dig/whois. Fast structured infrastructure footprint. Returns text."
 )]
-pub async fn dns_recon(ctx: ToolContext, input: DnsReconInput) -> String {
+pub async fn dns_recon(_ctx: ToolContext, input: DnsReconInput) -> String {
     let domain = input.domain.trim();
     let mut out: Vec<String> = Vec::new();
     if shell::have("dig").await {

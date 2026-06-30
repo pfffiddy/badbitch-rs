@@ -53,6 +53,9 @@ struct Cli {
     /// Write a template config.ini with all key slots.
     #[arg(long)]
     init_config: bool,
+    /// Surface per-tool timing, retry notices, and rate-limit waits.
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 fn build_context(cfg: &Arc<Config>) -> ToolContext {
@@ -89,19 +92,43 @@ async fn print_list_tools(cfg: &Config) {
     let mut names: Vec<String> = router.names().iter().map(|s| s.to_string()).collect();
     names.sort();
     println!("badbitch OSINT — {} tools  (model={})\n", names.len(), cfg.model);
+    // Map tool name -> required API key name
+    let key_tools = [
+        ("shodan", "shodan"),
+        ("censys", "censys_id"),
+        ("dnsdumpster", "dnsdumpster"),
+        ("virustotal", "virustotal"),
+        ("intelx", "intelx"),
+        ("rocketreach", "rocketreach"),
+        ("dehashed", "dehashed_key"),
+        ("breach_check", "hibp"),
+    ];
     for n in names {
-        let status = match n.as_str() {
+        let status: String = if let Some((_, key)) = key_tools.iter().find(|(t, _)| *t == n.as_str()) {
+            if cfg.key(key).is_empty() { format!("✗ no key ({key})") } else { format!("✓ key") }
+        } else {
+            match n.as_str() {
             "sherlock" => {
                 if shell::have("sherlock").await { "✓ sherlock".into() } else { "✗ missing sherlock".into() }
             }
             "holehe" => {
                 if shell::have("holehe").await { "✓ holehe".into() } else { "✗ missing holehe".into() }
             }
+            "theharvester" => {
+                if shell::have("theHarvester").await { "✓ theHarvester".into() } else { "✗ missing theHarvester".into() }
+            }
+            "phoneinfoga" => {
+                if shell::have("phoneinfoga").await { "✓ phoneinfoga".into() } else { "✗ missing phoneinfoga".into() }
+            }
+            "exif_metadata" => {
+                if shell::have("exiftool").await { "✓ exiftool".into() } else { "✗ missing exiftool".into() }
+            }
+            "run_shell" | "python_eval" => "✓ (shell)".into(),
             "fetch_rendered" => {
                 if shell::have("python3").await { "✓ python3 (needs playwright)".into() } else { "✗ missing python3".into() }
             }
             _ => "✓".to_string(),
-        };
+        }};
         println!("  {n:<22} {status}");
     }
 }
@@ -224,7 +251,11 @@ async fn repl(cfg: Arc<Config>) {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let cfg = Arc::new(Config::load());
+    let mut cfg_inner = Config::load();
+    if cli.verbose {
+        cfg_inner.verbose = true;
+    }
+    let cfg = Arc::new(cfg_inner);
 
     if cli.init_config {
         let path = Config::config_path();
