@@ -60,7 +60,7 @@ async fn summarize_turn(client: &OllamaClient, cfg: &Config, content: &str) -> S
         ),
         ChatMessage::user(crate::util::truncate_chars(content, 6000)),
     ];
-    let resp = match client.chat_no_tools(&sm, cfg).await {
+    let resp = match client.chat_no_tools(&sm, cfg, 0.2).await {
         Ok(r) => r,
         Err(e) => {
             debug::log(&format!("summary pass failed (non-fatal): {e}"));
@@ -82,6 +82,29 @@ async fn summarize_turn(client: &OllamaClient, cfg: &Config, content: &str) -> S
         return String::new();
     }
     format!("═══ TL;DR ═══\n{}\n═════════════\n\n", bullets.join("\n"))
+}
+
+/// Forced finalization: when the model won't stop calling tools (caps exhausted) or its final
+/// message is empty — classically because its last act was `save_dossier(...)`, so the whole
+/// write-up went into the tool arguments — make ONE tool-free call that forces it to state its
+/// findings. Without this the user sees `[no content]` after a full investigation. Returns None
+/// on failure (caller falls back to whatever content it had).
+async fn finalize(client: &OllamaClient, cfg: &Config, messages: &[ChatMessage]) -> Option<String> {
+    let mut msgs = messages.to_vec();
+    msgs.push(ChatMessage::user(
+        "You are wrapping up this turn — do NOT request any more tools. Using ONLY what you \
+         have already gathered (including any dossier you just saved), write your final answer \
+         to the user NOW as a Markdown dossier: state what you found, cite a source for each \
+         fact, and clearly flag any gaps. Respond in English.",
+    ));
+    match client.chat_no_tools(&msgs, cfg, cfg.gen_temp).await {
+        Ok(r) if !r.message.content.trim().is_empty() => Some(r.message.content),
+        Ok(_) => None,
+        Err(e) => {
+            debug::log(&format!("finalize pass failed (non-fatal): {e}"));
+            None
+        }
+    }
 }
 
 /// `_run_turn`: model + tool loop with iteration cap and optional continuations.
@@ -185,11 +208,23 @@ pub async fn run_turn(
         }
 
         messages.push(last_resp.message.clone());
-        let content = if last_resp.message.content.is_empty() {
-            "[no content]".to_string()
-        } else {
-            last_resp.message.content.clone()
-        };
+        // `tcs` still non-empty here means we exhausted continuations with the model still
+        // wanting tools; an empty final message usually means the write-up went into a
+        // save_dossier(...) call. Either way, force a tool-free wrap-up so the user gets output.
+        let capped_out = !tcs.is_empty();
+        let mut content = last_resp.message.content.clone();
+        if content.trim().is_empty() || capped_out {
+            if capped_out {
+                println!("  [tool limit reached — asking the model to write up its findings]");
+            }
+            if let Some(text) = finalize(client, cfg, messages).await {
+                messages.push(ChatMessage::simple("assistant", text.clone()));
+                content = text;
+            }
+        }
+        if content.trim().is_empty() {
+            content = "[no content]".to_string();
+        }
         debug::log(&format!(
             "assistant-final ({} chars): {}",
             content.chars().count(),
