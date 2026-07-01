@@ -105,12 +105,14 @@ impl OllamaClient {
         &self.model
     }
 
-    /// Tool-free model call used by the TL;DR summarizer (`_summarize_turn`, badbitch2.py:1601).
-    /// Uses lower temperature for a more deterministic summary.
+    /// Tool-free model call — used by the TL;DR summarizer and the forced-finalization
+    /// wrap-up. `temperature` lets the caller pick (low for a tight summary, the normal
+    /// generation temp for a full write-up).
     pub async fn chat_no_tools(
         &self,
         messages: &[ChatMessage],
         cfg: &Config,
+        temperature: f64,
     ) -> anyhow::Result<ChatResponse> {
         let body = json!({
             "model": self.model,
@@ -118,7 +120,7 @@ impl OllamaClient {
             "stream": false,
             "options": {
                 "num_ctx": cfg.num_ctx,
-                "temperature": 0.2,
+                "temperature": temperature,
                 "top_p": cfg.gen_top_p,
                 "repeat_penalty": cfg.gen_repeat,
             },
