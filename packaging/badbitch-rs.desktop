@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=badbitch-rs
+GenericName=OSINT Agent
+Comment=Full-spectrum OSINT agent — native control panel
+Exec=badbitch-gui
+Icon=badbitch-rs
+Terminal=false
+Categories=Utility;Security;Network;
+Keywords=osint;recon;intelligence;
+StartupNotify=true

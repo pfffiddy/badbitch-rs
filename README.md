@@ -180,15 +180,19 @@ expand any indicator across all cases, or extract entities from pasted text. See
 
 ## Packaging (.deb)
 
-Build a Debian/Ubuntu package that puts `badbitch` on `PATH` and ships a
+Build a Debian/Ubuntu package that puts `badbitch` (CLI) and `badbitch-gui`
+(desktop app, with an applications-menu launcher) on `PATH`, plus the
 `badbitch-setup` helper:
 
 ```bash
-./scripts/build-deb.sh                 # → target/deb/badbitch_<ver>_<arch>.deb
+./scripts/build-deb.sh                 # builds CLI + GUI → target/deb/badbitch_<ver>_<arch>.deb
 sudo apt install ./target/deb/badbitch_*.deb
 badbitch-setup                         # installs Ollama, pulls the model, adds
                                        # optional CLIs, writes the config
 ```
+
+After install: launch **badbitch-rs** from your applications menu (or run
+`badbitch-gui`), or use the `badbitch` CLI.
 
 Or the one-shot from a source checkout (build → install → setup):
 
