@@ -49,16 +49,28 @@ else
   warn "Ollama not available — skipping model pull. After installing it: ollama pull $MODEL"
 fi
 
-# 3. Optional OSINT CLIs (not apt-packaged) -----------------------------------
-if command -v pipx >/dev/null 2>&1; then
-  say "installing optional OSINT CLIs via pipx (sherlock, holehe, theHarvester)…"
-  pipx install sherlock-project >/dev/null 2>&1 || warn "pipx install sherlock-project failed"
-  pipx install holehe          >/dev/null 2>&1 || warn "pipx install holehe failed"
-  pipx install theHarvester    >/dev/null 2>&1 || warn "pipx install theHarvester failed"
-else
-  warn "pipx not found — skipping sherlock/holehe/theHarvester. Install pipx then: pipx install sherlock-project holehe theHarvester"
-fi
-say "phoneinfoga is optional and not on apt — see https://sundowndev.github.io/phoneinfoga/ if you need it."
+# 3. Optional OSINT CLIs -------------------------------------------------------
+# On Debian/Kali several are apt packages (more reliable than pipx, which fails on
+# theHarvester with newer Python). Try apt first, fall back to pipx.
+say "installing optional OSINT CLIs (sherlock, holehe, theHarvester)…"
+have_apt=0; command -v apt-get >/dev/null 2>&1 && have_apt=1
+
+# $1 = binary to check for, $2 = apt package (or ""), $3 = pipx package (or "")
+install_cli() {
+  if command -v "$1" >/dev/null 2>&1; then say "$1 already installed"; return; fi
+  if [ "$have_apt" = 1 ] && [ -n "$2" ] && sudo apt-get install -y "$2" >/dev/null 2>&1; then
+    say "installed $1 via apt ($2)"; return
+  fi
+  if command -v pipx >/dev/null 2>&1 && [ -n "$3" ] && pipx install "$3" >/dev/null 2>&1; then
+    say "installed $1 via pipx ($3)"; return
+  fi
+  warn "could not install $1 automatically — apt:'$2' pipx:'$3'; install manually if you need it"
+}
+
+install_cli theHarvester theharvester theHarvester
+install_cli sherlock     sherlock     sherlock-project
+install_cli holehe       ""           holehe
+say "phoneinfoga is optional — see https://sundowndev.github.io/phoneinfoga/ if you need it."
 
 # 4. Config -------------------------------------------------------------------
 CFG="${HOME}/.config/badbitch-rs/config.ini"
