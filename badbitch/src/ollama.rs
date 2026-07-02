@@ -71,7 +71,11 @@ pub struct ChatResponse {
     #[serde(default)]
     pub prompt_eval_count: Option<u64>,
     #[serde(default)]
+    pub prompt_eval_duration: Option<u64>,
+    #[serde(default)]
     pub eval_count: Option<u64>,
+    #[serde(default)]
+    pub eval_duration: Option<u64>,
     #[serde(default)]
     pub total_duration: Option<u64>,
     #[serde(default)]
@@ -103,6 +107,26 @@ impl OllamaClient {
 
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// Query Ollama's `/api/ps` — the loaded models and how much of each is resident in VRAM.
+    /// Used to log "how the hardware handled it" (GPU vs CPU split). Best-effort; None on error.
+    pub async fn ps(&self) -> Option<Value> {
+        let resp = self
+            .http
+            .get(format!("{}/api/ps", self.host))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.json::<Value>().await.ok()
     }
 
     /// Tool-free model call — used by the TL;DR summarizer and the forced-finalization

@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::compact::compact;
 use crate::config::Config;
 use crate::debug;
-use crate::ollama::{ChatMessage, OllamaClient};
+use crate::ollama::{ChatMessage, ChatResponse, OllamaClient};
 use crate::recovery_calls::get_tool_calls;
 use crate::tool::web::{ReconSweepInput, recon_sweep};
 use crate::tool::{ToolContext, ToolRouter};
@@ -107,6 +107,82 @@ async fn finalize(client: &OllamaClient, cfg: &Config, messages: &[ChatMessage])
     }
 }
 
+/// Human-readable performance line from one model call's telemetry: generation and prompt
+/// throughput (tok/s), model load time, and wall time. This is the "how did it run" signal.
+fn perf_line(resp: &ChatResponse) -> String {
+    let per_s = |count: Option<u64>, dur_ns: Option<u64>| -> f64 {
+        match (count, dur_ns) {
+            (Some(c), Some(d)) if d > 0 => c as f64 / (d as f64 / 1e9),
+            _ => 0.0,
+        }
+    };
+    let gen_tps = per_s(resp.eval_count, resp.eval_duration);
+    let prompt_tps = per_s(resp.prompt_eval_count, resp.prompt_eval_duration);
+    let load_ms = resp.load_duration.unwrap_or(0) as f64 / 1e6;
+    let total_s = resp.total_duration.unwrap_or(0) as f64 / 1e9;
+    format!(
+        "perf: {gen_tps:.1} tok/s gen ({} tok) · {prompt_tps:.0} tok/s prompt ({} tok) · load {load_ms:.0}ms · total {total_s:.1}s",
+        resp.eval_count.unwrap_or(0),
+        resp.prompt_eval_count.unwrap_or(0),
+    )
+}
+
+/// Human-readable hardware line from Ollama's `/api/ps`: for the active model, how much is
+/// resident in VRAM vs total — i.e. the GPU/CPU split. Answers "did it run on the GPU?".
+fn hardware_line(ps: &Value, model: &str) -> String {
+    let gb = |b: u64| b as f64 / 1e9;
+    if let Some(models) = ps.get("models").and_then(|m| m.as_array()) {
+        for m in models {
+            let name = m
+                .get("name")
+                .or_else(|| m.get("model"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if model.is_empty() || name == model {
+                let size = m.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                let vram = m.get("size_vram").and_then(|v| v.as_u64()).unwrap_or(0);
+                let split = if size == 0 {
+                    "unknown".to_string()
+                } else if vram == 0 {
+                    "100% CPU".to_string()
+                } else if vram >= size {
+                    "100% GPU".to_string()
+                } else {
+                    let g = (vram as f64 / size as f64) * 100.0;
+                    format!("{g:.0}% GPU / {:.0}% CPU", 100.0 - g)
+                };
+                return format!(
+                    "hardware: {name} — {:.1}GB total, {:.1}GB in VRAM → {split} (ctx {})",
+                    gb(size),
+                    gb(vram),
+                    m.get("context_length").and_then(|v| v.as_u64()).unwrap_or(0)
+                );
+            }
+        }
+    }
+    "hardware: (no model resident — /api/ps returned nothing for it)".to_string()
+}
+
+/// Log per-call perf to the debug log (always) and echo a concise line on screen when verbose.
+fn log_perf(resp: &ChatResponse, cfg: &Config) {
+    let line = perf_line(resp);
+    debug::log(&format!("  {line}"));
+    if cfg.verbose {
+        println!("    ⚙ {line}");
+    }
+}
+
+/// Log the hardware split once per turn (best-effort): debug log always, screen when verbose.
+async fn log_hardware(client: &OllamaClient, cfg: &Config) {
+    if let Some(ps) = client.ps().await {
+        let line = hardware_line(&ps, client.model());
+        debug::log(&format!("  {line}"));
+        if cfg.verbose {
+            println!("    ⚙ {line}");
+        }
+    }
+}
+
 /// `_run_turn`: model + tool loop with iteration cap and optional continuations.
 pub async fn run_turn(
     client: &OllamaClient,
@@ -134,6 +210,8 @@ pub async fn run_turn(
             }
         };
         debug::log_response(&resp, "turn-start");
+        log_perf(&resp, cfg);
+        log_hardware(client, cfg).await; // once per turn — model is now resident
         let (mut tcs, mut recovered) = get_tool_calls(&resp);
         let mut last_resp = resp;
 
@@ -176,6 +254,7 @@ pub async fn run_turn(
                 }
             };
             debug::log_response(&resp, &format!("mid-loop iter={iters}"));
+            log_perf(&resp, cfg);
             let g = get_tool_calls(&resp);
             tcs = g.0;
             recovered = g.1;
