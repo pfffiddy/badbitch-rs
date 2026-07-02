@@ -5,9 +5,14 @@
 set -e
 case "$1" in
   configure)
+    # Refresh menu + icon caches so 'badbitch-rs' shows up in the app launcher.
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications 2>/dev/null || true
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
     cat <<'EOF'
 
-  badbitch installed → run `badbitch` (or `badbitch --list-tools`).
+  badbitch installed:
+    • CLI:  badbitch   (or  badbitch --list-tools)
+    • GUI:  badbitch-gui   (also in your applications menu as "badbitch-rs")
 
   Finish setup (Ollama + model + optional OSINT CLIs + config), as your normal user:
 
