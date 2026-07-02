@@ -66,9 +66,20 @@ if [ ! -f "$CFG" ]; then
   badbitch --init-config >/dev/null 2>&1 || warn "could not write $CFG"
 fi
 if [ -f "$CFG" ]; then
-  # Point the config at the model we just pulled.
-  sed -i "s|^name = .*|name = ${MODEL}|" "$CFG" 2>/dev/null || true
-  say "config: $CFG  (set num_ctx for your GPU, fill [api_keys] with any keys you have)"
+  # Point the config at the model we just pulled. Match any spacing around '=' —
+  # config files may be written "name = x", "name =x", or "name=x".
+  if grep -qE '^[[:space:]]*name[[:space:]]*=' "$CFG"; then
+    sed -i "s|^[[:space:]]*name[[:space:]]*=.*|name = ${MODEL}|" "$CFG" 2>/dev/null || true
+  else
+    # No [model] name line at all — add one under [model] (or append a section).
+    if grep -qE '^\[model\]' "$CFG"; then
+      sed -i "s|^\[model\]|[model]\nname = ${MODEL}|" "$CFG" 2>/dev/null || true
+    else
+      printf '\n[model]\nname = %s\n' "$MODEL" >> "$CFG"
+    fi
+  fi
+  say "config: $CFG  ->  model set to ${MODEL}"
+  say "  (set num_ctx for your GPU, fill [api_keys] with any keys you have)"
 fi
 
 # 5. SearXNG note (needed by web_search; not apt-installable cleanly) ----------
