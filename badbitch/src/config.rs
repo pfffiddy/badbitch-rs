@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use configparser::ini::Ini;
+use serde_json::Value;
 
 pub const UA: &str =
     "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0";
@@ -43,6 +44,12 @@ pub struct Config {
     pub verbose: bool,
     /// [osint] summary = true — generate a 3-5 bullet TL;DR after each turn.
     pub summarize: bool,
+    /// [osint] think — None = model default; Some(false) disables a reasoning model's
+    /// thinking channel (faster); Some(true) forces it on.
+    pub think: Option<bool>,
+    /// [model_options] — arbitrary Ollama generation options (temperature, top_k, num_gpu,
+    /// mirostat, …) passed straight through in the chat request's `options`.
+    pub model_options: serde_json::Map<String, serde_json::Value>,
     /// UA rotation pool for per-request header variation (badbitch2.py:129).
     pub ua_pool: Vec<String>,
 }
@@ -107,6 +114,24 @@ impl Config {
             .or_else(|| osint("ollama_host").map(|h| normalize_host(&h)))
             .unwrap_or_else(|| "http://127.0.0.1:11434".into());
 
+        // [osint] think = true/false — absent leaves the model default.
+        let think = osint("think").map(|v| matches!(v.to_lowercase().as_str(), "true" | "yes" | "1" | "on"));
+
+        // [model_options] — pass-through Ollama options, typed best-effort.
+        let mut model_options = serde_json::Map::new();
+        if let Some(map) = ini.get_map()
+            && let Some(sec) = map.get("model_options")
+        {
+            for (k, v) in sec {
+                if let Some(v) = v {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        model_options.insert(k.clone(), parse_opt_value(v));
+                    }
+                }
+            }
+        }
+
         Config {
             config_path: path,
             // A 14B abliterated model — fits a 12 GB GPU ~100% (no CPU offload); matches the
@@ -139,6 +164,8 @@ impl Config {
             api_keys,
             verbose: getb("verbose", false),
             summarize: getb("summary", true),
+            think,
+            model_options,
             ua_pool: vec![
                 UA.to_string(),
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".into(),
@@ -169,6 +196,26 @@ impl Config {
     }
 }
 
+/// Best-effort typing of a config option value for Ollama: int, float, bool, comma-list
+/// (for `stop`), else string.
+fn parse_opt_value(s: &str) -> Value {
+    if let Ok(i) = s.parse::<i64>() {
+        return Value::from(i);
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        return Value::from(f);
+    }
+    match s.to_lowercase().as_str() {
+        "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        _ => {}
+    }
+    if s.contains(',') {
+        return Value::Array(s.split(',').map(|x| Value::from(x.trim())).collect());
+    }
+    Value::from(s)
+}
+
 fn normalize_host(h: &str) -> String {
     let h = h.trim();
     if h.starts_with("http://") || h.starts_with("https://") {
@@ -176,4 +223,42 @@ fn normalize_host(h: &str) -> String {
     } else {
         format!("http://{}", h.trim_end_matches('/'))
     }
+}
+
+/// Ordered `[api_keys]` slots, so the GUI can render them in a stable order.
+pub const API_KEY_NAMES: &[&str] = &[
+    "shodan",
+    "censys_id",
+    "censys_secret",
+    "virustotal",
+    "intelx",
+    "intelx_base",
+    "dnsdumpster",
+    "rocketreach",
+    "opencorporates",
+    "attom",
+    "regrid",
+    "hibp",
+    "dehashed_email",
+    "dehashed_key",
+];
+
+/// Write an INI file from ordered sections. Used by the GUI's "Save settings" so the config
+/// stays human-readable and in a predictable order. Creates the parent dir.
+pub fn write_ini(
+    path: &std::path::Path,
+    sections: &[(&str, Vec<(String, String)>)],
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = String::new();
+    for (sec, kvs) in sections {
+        out.push_str(&format!("[{sec}]\n"));
+        for (k, v) in kvs {
+            out.push_str(&format!("{k} = {v}\n"));
+        }
+        out.push('\n');
+    }
+    std::fs::write(path, out)
 }

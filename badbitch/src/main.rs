@@ -1,34 +1,15 @@
 //! badbitch-rs — full-spectrum OSINT agent (Rust port of badbitch2.py), driving the same
 //! local abliterated model through Ollama.
 
-// Phase-1 deliberately ships some support code the Phase-2 tools will consume (API-key
-// helpers, fetch_json, run_shell_line, extra config fields). Allow it to keep the build quiet
-// until those tools land.
-#![allow(dead_code)]
-
-mod agent;
-mod classify;
-mod compact;
-mod config;
-mod debug;
-mod http;
-mod ollama;
-mod prompt;
-mod recovery_calls;
-mod shell;
-mod store;
-mod tool;
-mod util;
-
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use clap::Parser;
 
-use crate::config::Config;
-use crate::ollama::{ChatMessage, OllamaClient};
-use crate::tool::{ToolContext, toolset};
+use badbitch::config::Config;
+use badbitch::ollama::{ChatMessage, OllamaClient};
+use badbitch::tool::toolset;
+use badbitch::{CONFIG_TEMPLATE, agent, build_context, debug, debug_log_path, prompt, shell, store};
 
 #[derive(Parser, Debug)]
 #[command(name = "badbitch", about = "Full-spectrum OSINT agent (Rust).")]
@@ -56,35 +37,6 @@ struct Cli {
     /// Surface per-tool timing, retry notices, and rate-limit waits.
     #[arg(short, long)]
     verbose: bool,
-}
-
-fn build_context(cfg: &Arc<Config>) -> ToolContext {
-    let mut builder = reqwest::Client::builder();
-    if cfg.tor {
-        match reqwest::Proxy::all(&cfg.tor_proxy) {
-            Ok(p) => builder = builder.proxy(p),
-            Err(e) => eprintln!("[warn] bad tor_proxy {}: {e} — continuing without Tor", cfg.tor_proxy),
-        }
-    }
-    let http = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-
-    let workdir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let docs_dir = workdir.join("case_docs");
-    let _ = std::fs::remove_dir_all(&docs_dir); // _reset_docs (badbitch2.py:125)
-
-    ToolContext {
-        config: cfg.clone(),
-        http,
-        docs_dir,
-        doc_seq: Arc::new(AtomicUsize::new(0)),
-        db_path: cfg.db_file.clone(),
-    }
-}
-
-fn debug_log_path() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("badbitch-rs_debug.log")
 }
 
 async fn print_list_tools(cfg: &Config) {
@@ -134,47 +86,6 @@ async fn print_list_tools(cfg: &Config) {
         println!("  {n:<22} {status}");
     }
 }
-
-const CONFIG_TEMPLATE: &str = r#"[model]
-name = richardyoung/qwen3-14b-abliterated:latest
-
-[osint]
-searxng_url       = http://127.0.0.1:8888/search
-num_ctx           = 20480
-max_tool_iters    = 40
-max_continuations = 12
-http_timeout      = 30
-shell_timeout     = 1120
-long_tool_timeout = 300
-max_tool_result_chars = 4000
-max_fetch_chars       = 8000
-temperature           = 0.3
-top_p                 = 0.9
-repeat_penalty        = 1.1
-prefetch_recon        = true
-geocode_countrycodes  = us
-tor       = false
-tor_proxy = socks5h://127.0.0.1:9050
-# ollama_host = http://127.0.0.1:11434
-case_db   = ~/.local/share/badbitch-rs/osint_cases.sqlite
-audit_log = ~/.local/share/badbitch-rs/osint_audit.log
-
-[api_keys]
-shodan         =
-censys_id      =
-censys_secret  =
-virustotal     =
-intelx         =
-intelx_base    = https://2.intelx.io
-dnsdumpster    =
-rocketreach    =
-opencorporates =
-attom          =
-regrid         =
-hibp           =
-dehashed_email =
-dehashed_key   =
-"#;
 
 async fn single_shot(cfg: Arc<Config>, query: String) {
     debug::init(&debug_log_path());

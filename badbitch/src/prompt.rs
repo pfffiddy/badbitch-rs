@@ -1,7 +1,8 @@
-//! System prompt — ported verbatim from `SYSTEM` (badbitch2.py:1382), with workdir/db/model
-//! appended at runtime (badbitch2.py:1480).
+//! System prompt — the built-in `SYSTEM` playbook, with workdir/db/model appended at runtime.
+//! An optional override file (`~/.config/badbitch-rs/system_prompt.txt`) lets the GUI (or the
+//! user) replace the base prompt without recompiling; delete it to restore the default.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 
@@ -115,9 +116,53 @@ Don't export an empty or single-entity case; say so instead.
   not private surveillance of uninvolved individuals.
 - Be direct. No filler. Flag uncertainty plainly."#;
 
+/// Where a user/GUI-provided prompt override lives. Present → used instead of `SYSTEM`.
+pub fn override_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config/badbitch-rs/system_prompt.txt")
+}
+
+/// The compiled-in default prompt (for the GUI's "reset to default").
+pub fn default_prompt() -> &'static str {
+    SYSTEM
+}
+
+/// The active base prompt: the override file if it exists and is non-empty, else the default.
+pub fn base_prompt() -> String {
+    if let Ok(txt) = std::fs::read_to_string(override_path())
+        && !txt.trim().is_empty()
+    {
+        return txt;
+    }
+    SYSTEM.to_string()
+}
+
+/// Save an override prompt (creates the config dir). Empty text clears the override.
+pub fn save_override(text: &str) -> std::io::Result<()> {
+    let path = override_path();
+    if text.trim().is_empty() {
+        return clear_override();
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, text)
+}
+
+/// Remove the override, restoring the compiled-in default. Ok if it didn't exist.
+pub fn clear_override() -> std::io::Result<()> {
+    match std::fs::remove_file(override_path()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn system_prompt(cfg: &Config, workdir: &Path) -> String {
     format!(
-        "{SYSTEM}\nWorking directory: {}\nCase store: {}\nModel: {}\n",
+        "{}\nWorking directory: {}\nCase store: {}\nModel: {}\n",
+        base_prompt(),
         workdir.display(),
         cfg.db_file.display(),
         cfg.model
