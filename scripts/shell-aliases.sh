@@ -62,30 +62,40 @@ bbc() {
     p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
   done
 
+  local pid nm c=0
+
   if [ "$hard" -eq 1 ]; then
     echo "[bbc] HARD mode — closing your non-essential processes (AI stack + this terminal kept)…"
-    local pid comm
+    local comm
     while read -r pid comm; do
       case " $protect_pids " in *" $pid "*) continue ;; esac   # our own tree
       [ "$pid" = "$$" ] && continue
       printf '%s' "$comm" | grep -qiE "$BBC_PROTECT" && continue
-      kill -TERM "$pid" 2>/dev/null
+      kill -TERM "$pid" 2>/dev/null && { echo "  closed $comm ($pid)"; c=$((c + 1)); }
     done < <(ps -u "$(id -un)" -o pid=,comm= 2>/dev/null)
-    sleep 3
+    sleep 2
   else
     echo "[bbc] closing heavy desktop apps to free RAM/VRAM (safe mode; --hard for more)…"
+    # Substring, case-insensitive match (via pgrep -i) so variants are caught too —
+    # e.g. "firefox" also matches Kali's "firefox-esr" and "firefox-bin".
     local apps="chrome chromium firefox brave opera vivaldi msedge \
                 discord slack telegram signal element spotify steam \
-                thunderbird soffice.bin obs zoom teams code"
-    local a
+                thunderbird soffice obs zoom teams code"
+    local a killed=""
     for a in $apps; do
       printf '%s' "$a" | grep -qiE "$BBC_PROTECT" && continue   # never a protected name
-      pkill -TERM -x "$a" 2>/dev/null
+      for pid in $(pgrep -i "$a" 2>/dev/null); do
+        case " $protect_pids " in *" $pid "*) continue ;; esac
+        nm=$(ps -o comm= -p "$pid" 2>/dev/null) || continue
+        printf '%s' "$nm" | grep -qiE "$BBC_PROTECT" && continue
+        kill -TERM "$pid" 2>/dev/null && { echo "  closed $nm ($pid)"; killed="$killed $pid"; c=$((c + 1)); }
+      done
     done
-    sleep 3
-    for a in $apps; do pkill -KILL -x "$a" 2>/dev/null; done
+    sleep 2
+    for pid in $killed; do kill -KILL "$pid" 2>/dev/null; done   # hard-kill any stragglers
   fi
 
+  echo "[bbc] closed $c process(es)."
   _bbc_keep_services
   _bbc_open_btop
 }
