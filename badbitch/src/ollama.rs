@@ -107,7 +107,10 @@ impl OllamaClient {
 
     /// Tool-free model call — used by the TL;DR summarizer and the forced-finalization
     /// wrap-up. `temperature` lets the caller pick (low for a tight summary, the normal
-    /// generation temp for a full write-up).
+    /// generation temp for a full write-up). Uses the same generous timeout as the main
+    /// tool loop: the finalization pass writes a FULL dossier, which on a large model can
+    /// take minutes — a short timeout here silently drops the write-up and the summary,
+    /// leaving the user with "[no content]" and no TL;DR.
     pub async fn chat_no_tools(
         &self,
         messages: &[ChatMessage],
@@ -128,7 +131,7 @@ impl OllamaClient {
         let resp = self
             .http
             .post(format!("{}/api/chat", self.host))
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(600))
             .json(&body)
             .send()
             .await?;
