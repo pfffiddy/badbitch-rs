@@ -84,7 +84,7 @@ fn build_context(cfg: &Arc<Config>) -> ToolContext {
 fn debug_log_path() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join("badbitch2_debug.log")
+        .join("badbitch-rs_debug.log")
 }
 
 async fn print_list_tools(cfg: &Config) {
@@ -156,8 +156,8 @@ geocode_countrycodes  = us
 tor       = false
 tor_proxy = socks5h://127.0.0.1:9050
 # ollama_host = http://127.0.0.1:11434
-case_db   = ~/.local/share/badbitch/osint_cases.sqlite
-audit_log = ~/.local/share/badbitch/osint_audit.log
+case_db   = ~/.local/share/badbitch-rs/osint_cases.sqlite
+audit_log = ~/.local/share/badbitch-rs/osint_audit.log
 
 [api_keys]
 shodan         =

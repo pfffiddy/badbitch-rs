@@ -1,8 +1,9 @@
 //! Config loader — ports the `CFG.*` reads from badbitch2.py:71-104.
 //!
-//! INI only, from `~/.config/badbitch/config.ini`. Every value falls back to the same
-//! default as the Python. Per the port's "separate DB" decision the case store is a
-//! sibling `*_rs.sqlite` file so the Python tool's saved cases are never touched.
+//! INI only, from `~/.config/badbitch-rs/config.ini`. Every value falls back to a sane
+//! default, so a fresh install with no config file just works. badbitch-rs is fully
+//! self-contained: its config, case DB, and audit log all live under a dedicated
+//! `badbitch-rs` namespace and never read or write another tool's files.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -58,19 +59,9 @@ fn expand(p: &str) -> PathBuf {
     }
 }
 
-/// Derive the Rust case-DB path from the Python `case_db`: insert `_rs` before the
-/// extension so `osint_cases.sqlite` → `osint_cases_rs.sqlite`.
-fn rs_db_path(case_db: &str) -> PathBuf {
-    let p = expand(case_db);
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("osint_cases");
-    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("sqlite");
-    let parent = p.parent().map(|x| x.to_path_buf()).unwrap_or_default();
-    parent.join(format!("{stem}_rs.{ext}"))
-}
-
 impl Config {
     pub fn config_path() -> PathBuf {
-        home().join(".config/badbitch/config.ini")
+        home().join(".config/badbitch-rs/config.ini")
     }
 
     /// Load config, applying Python's fallbacks for any missing key. A missing file is fine
@@ -94,9 +85,9 @@ impl Config {
         };
 
         let case_db = osint("case_db")
-            .unwrap_or_else(|| "~/.local/share/badbitch/osint_cases.sqlite".into());
+            .unwrap_or_else(|| "~/.local/share/badbitch-rs/osint_cases.sqlite".into());
         let log_file = osint("audit_log")
-            .unwrap_or_else(|| "~/.local/share/badbitch/osint_audit.log".into());
+            .unwrap_or_else(|| "~/.local/share/badbitch-rs/osint_audit.log".into());
 
         // API keys: every entry under [api_keys].
         let mut api_keys = HashMap::new();
@@ -143,7 +134,7 @@ impl Config {
             tor: getb("tor", false),
             tor_proxy: osint("tor_proxy")
                 .unwrap_or_else(|| "socks5h://127.0.0.1:9050".into()),
-            db_file: rs_db_path(&case_db),
+            db_file: expand(&case_db),
             log_file: expand(&log_file),
             api_keys,
             verbose: getb("verbose", false),

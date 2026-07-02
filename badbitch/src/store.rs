@@ -1,5 +1,5 @@
 //! Case storage — ports `_db` + save/load/list/export (badbitch2.py:255-323).
-//! Same schema as the Python tool, but a separate `*_rs.sqlite` file (see config::rs_db_path).
+//! Same schema as the Python tool, but under badbitch-rs's own isolated data dir (config.rs).
 
 use std::path::Path;
 
