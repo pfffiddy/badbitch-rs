@@ -179,6 +179,22 @@ Or the one-shot from a source checkout (build → install → setup):
 apt-installable deps; Ollama, the model, SearXNG, and the pipx OSINT CLIs are
 handled by the setup step because they can't be clean apt dependencies.
 
+## Shell helpers (`bb3`, `bbc`)
+
+`scripts/shell-aliases.sh` provides two conveniences — source it from your shell rc:
+
+```bash
+echo 'source ~/badbitch-rs/scripts/shell-aliases.sh' >> ~/.bashrc   # or ~/.zshrc
+```
+
+- **`bb3`** — launches the agent (alias for the installed `badbitch`).
+- **`bbc [--hard]`** — frees RAM/VRAM for the local model, then opens `btop` (unless
+  it's already running). Safe mode closes heavy desktop apps (browsers, Electron
+  apps, Steam…); `--hard` TERMs every process you own except a protect-list. Either
+  mode **never touches** the badbitch stack (Ollama, the agent, SearXNG + Docker, Tor,
+  the tool CLIs), the desktop/session/network, or the terminal you ran it from. Edit
+  `BBC_PROTECT` / the app list in the script to taste.
+
 ## Development
 
 ```bash
