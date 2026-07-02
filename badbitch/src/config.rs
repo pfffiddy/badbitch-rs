@@ -118,8 +118,10 @@ impl Config {
 
         Config {
             config_path: path,
+            // A 14B abliterated model — fits a 12 GB GPU ~100% (no CPU offload); matches the
+            // config template and badbitch-setup default. Bigger models need more VRAM.
             model: s("model", "name")
-                .unwrap_or_else(|| "hf.co/unsloth/Qwen3-14B-GGUF:IQ4_XS".into()),
+                .unwrap_or_else(|| "richardyoung/qwen3-14b-abliterated:latest".into()),
             ollama_host,
             searx_url: osint("searxng_url")
                 .unwrap_or_else(|| "http://127.0.0.1:8888/search".into()),
