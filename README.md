@@ -76,8 +76,10 @@ In the REPL, `/reset` clears history + collected docs; `exit`/`quit` leaves.
    config defaults target a local abliterated/uncensored Qwen3 GGUF; any model
    with native tool-calls works, and the agent also recovers tool calls that
    weaker models leak as text.
-2. **`badbitch --init-config`** → writes `~/.config/badbitch/config.ini`. Fill in
-   the `[api_keys]` you have (all optional).
+2. **`badbitch --init-config`** → writes `~/.config/badbitch-rs/config.ini`. Fill in
+   the `[api_keys]` you have (all optional). badbitch-rs is self-contained — its
+   config, case DB (`~/.local/share/badbitch-rs/`), and logs live under their own
+   namespace and never touch another tool's files.
 3. **SearXNG** running locally for `web_search` (default
    `http://127.0.0.1:8888/search`).
 4. **Optional CLIs** for the tools that shell out: `sherlock`, `holehe`,

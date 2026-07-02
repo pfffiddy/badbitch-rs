@@ -61,7 +61,7 @@ fi
 say "phoneinfoga is optional and not on apt — see https://sundowndev.github.io/phoneinfoga/ if you need it."
 
 # 4. Config -------------------------------------------------------------------
-CFG="${HOME}/.config/badbitch/config.ini"
+CFG="${HOME}/.config/badbitch-rs/config.ini"
 if [ ! -f "$CFG" ]; then
   badbitch --init-config >/dev/null 2>&1 || warn "could not write $CFG"
 fi

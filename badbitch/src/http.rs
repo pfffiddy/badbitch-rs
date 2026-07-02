@@ -190,7 +190,7 @@ const FETCH_CACHE_TTL: u64 = 21_600; // 6 hours, matching Python default
 fn cache_dir() -> std::path::PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
-        .join("badbitch2_fetch_cache")
+        .join("badbitch-rs_fetch_cache")
 }
 
 fn cache_path(url: &str) -> std::path::PathBuf {
