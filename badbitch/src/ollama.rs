@@ -87,21 +87,27 @@ pub struct OllamaClient {
     host: String,
     model: String,
     options: Value,
+    think: Option<bool>,
 }
 
 impl OllamaClient {
     pub fn new(cfg: &Config) -> Self {
+        // Base sampling options, then merge any [model_options] pass-through (which can
+        // override the base and add anything `ollama run` supports: top_k, num_gpu, mirostat…).
+        let mut opts = serde_json::Map::new();
+        opts.insert("num_ctx".into(), json!(cfg.num_ctx));
+        opts.insert("temperature".into(), json!(cfg.gen_temp));
+        opts.insert("top_p".into(), json!(cfg.gen_top_p));
+        opts.insert("repeat_penalty".into(), json!(cfg.gen_repeat));
+        for (k, v) in &cfg.model_options {
+            opts.insert(k.clone(), v.clone());
+        }
         OllamaClient {
             http: reqwest::Client::new(),
             host: cfg.ollama_host.clone(),
             model: cfg.model.clone(),
-            // `_gen_options` (badbitch2.py:1639)
-            options: json!({
-                "num_ctx": cfg.num_ctx,
-                "temperature": cfg.gen_temp,
-                "top_p": cfg.gen_top_p,
-                "repeat_penalty": cfg.gen_repeat,
-            }),
+            options: Value::Object(opts),
+            think: cfg.think,
         }
     }
 
@@ -176,13 +182,17 @@ impl OllamaClient {
         tools: &[ToolSpec],
     ) -> anyhow::Result<ChatResponse> {
         let wire_tools: Vec<Value> = tools.iter().map(tool_to_wire).collect();
-        let body = json!({
+        let mut body = json!({
             "model": self.model,
             "messages": messages,
             "tools": wire_tools,
             "stream": false,
             "options": self.options,
         });
+        // Enable/disable a reasoning model's thinking channel when configured.
+        if let Some(t) = self.think {
+            body["think"] = json!(t);
+        }
         let resp = self
             .http
             .post(format!("{}/api/chat", self.host))
@@ -199,6 +209,29 @@ impl OllamaClient {
             .map_err(|e| anyhow::anyhow!("ollama: bad response: {e}; body={}", &text))?;
         Ok(parsed)
     }
+}
+
+/// List locally-installed Ollama model names via `/api/tags` (for the GUI's model picker).
+/// Best-effort — returns an empty list if Ollama is unreachable.
+pub async fn list_models(host: &str) -> Vec<String> {
+    let url = format!("{}/api/tags", host.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let resp = match client.get(url).timeout(Duration::from_secs(10)).send().await {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+    let v: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    v.get("models")
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn tool_to_wire(spec: &ToolSpec) -> Value {

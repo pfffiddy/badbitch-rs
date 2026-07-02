@@ -55,6 +55,26 @@ cargo build --release
 ./target/release/badbitch "123 Main St, City ST"   # single-shot, then exit
 ```
 
+## GUI (`badbitch-gui`)
+
+A native desktop control panel (egui), behind the opt-in `gui` feature:
+
+```bash
+cargo build --release --features gui --bin badbitch-gui
+./target/release/badbitch-gui
+```
+
+- **Run** tab — enter a target, watch tool calls, per-turn perf + GPU/CPU split, and the
+  final dossier stream in live, with a Quiet/Normal/Verbose filter.
+- **Settings** tab — edit every param, pick a model from your installed Ollama models,
+  a **Thinking: Default / On / Off** toggle, and the full set of Ollama generation options
+  (num_ctx, temperature, top_k, min_p, mirostat, num_gpu, …). Saves to
+  `~/.config/badbitch-rs/config.ini`.
+- **Prompt** tab — view/edit the system prompt; save writes an override file, reset restores
+  the built-in default.
+- **🧠 Thought process** button — opens a second window showing the model's reasoning and
+  every command it issues, with its own verbosity filter.
+
 ### CLI
 
 | Command | Description |

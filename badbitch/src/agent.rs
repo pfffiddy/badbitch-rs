@@ -1,6 +1,7 @@
 //! Agent loop — ports `_run_turn` (badbitch2.py:1647), `_preflight` (1797), and
 //! `_summarize_turn` (badbitch2.py:1601).
 
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use serde_json::Value;
@@ -13,6 +14,32 @@ use crate::recovery_calls::get_tool_calls;
 use crate::tool::web::{ReconSweepInput, recon_sweep};
 use crate::tool::{ToolContext, ToolRouter};
 use crate::util::{clip_result, truncate_chars};
+
+/// Live events emitted during a turn, so a UI (the GUI) can show progress without parsing
+/// stdout. The CLI passes `None` and relies on its `println!`s.
+#[derive(Clone, Debug)]
+pub enum AgentEvent {
+    /// A notice (recovered tool calls, hitting the cap, a continuation, finalization).
+    Info(String),
+    /// The model's reasoning channel for a step (if the model emits one).
+    Thinking(String),
+    /// A tool the model invoked, rendered as `name(args)`.
+    ToolCall(String),
+    /// A tool's (truncated) result preview.
+    ToolResult(String),
+    /// Per-call performance line (tok/s, load, total).
+    Perf(String),
+    /// Per-turn hardware line (GPU/CPU split from /api/ps).
+    Hardware(String),
+    /// The final assistant answer for the turn.
+    Final(String),
+}
+
+fn send_ev(emit: Option<&Sender<AgentEvent>>, ev: AgentEvent) {
+    if let Some(tx) = emit {
+        let _ = tx.send(ev);
+    }
+}
 
 fn shown(args: &Value) -> String {
     match args.as_object() {
@@ -163,33 +190,49 @@ fn hardware_line(ps: &Value, model: &str) -> String {
     "hardware: (no model resident — /api/ps returned nothing for it)".to_string()
 }
 
-/// Log per-call perf to the debug log (always) and echo a concise line on screen when verbose.
-fn log_perf(resp: &ChatResponse, cfg: &Config) {
+/// Log per-call perf to the debug log (always), echo on screen when verbose, emit to the UI.
+fn log_perf(resp: &ChatResponse, cfg: &Config, emit: Option<&Sender<AgentEvent>>) {
     let line = perf_line(resp);
     debug::log(&format!("  {line}"));
     if cfg.verbose {
         println!("    ⚙ {line}");
     }
+    send_ev(emit, AgentEvent::Perf(line));
 }
 
-/// Log the hardware split once per turn (best-effort): debug log always, screen when verbose.
-async fn log_hardware(client: &OllamaClient, cfg: &Config) {
+/// Log the hardware split once per turn (best-effort): debug log always, screen when verbose,
+/// and emit to the UI.
+async fn log_hardware(client: &OllamaClient, cfg: &Config, emit: Option<&Sender<AgentEvent>>) {
     if let Some(ps) = client.ps().await {
         let line = hardware_line(&ps, client.model());
         debug::log(&format!("  {line}"));
         if cfg.verbose {
             println!("    ⚙ {line}");
         }
+        send_ev(emit, AgentEvent::Hardware(line));
     }
 }
 
-/// `_run_turn`: model + tool loop with iteration cap and optional continuations.
+/// Convenience wrapper for the CLI, which doesn't stream events.
 pub async fn run_turn(
     client: &OllamaClient,
     router: &ToolRouter,
     ctx: &ToolContext,
     cfg: &Config,
     messages: &mut Vec<ChatMessage>,
+) -> String {
+    run_turn_streaming(client, router, ctx, cfg, messages, None).await
+}
+
+/// `_run_turn`: model + tool loop with iteration cap and optional continuations. `emit`, when
+/// present, receives `AgentEvent`s so a UI can show live progress.
+pub async fn run_turn_streaming(
+    client: &OllamaClient,
+    router: &ToolRouter,
+    ctx: &ToolContext,
+    cfg: &Config,
+    messages: &mut Vec<ChatMessage>,
+    emit: Option<&Sender<AgentEvent>>,
 ) -> String {
     let specs = router.tool_specs();
     let mut continuations = 0usize;
@@ -210,8 +253,11 @@ pub async fn run_turn(
             }
         };
         debug::log_response(&resp, "turn-start");
-        log_perf(&resp, cfg);
-        log_hardware(client, cfg).await; // once per turn — model is now resident
+        if let Some(t) = &resp.message.thinking {
+            send_ev(emit, AgentEvent::Thinking(t.clone()));
+        }
+        log_perf(&resp, cfg, emit);
+        log_hardware(client, cfg, emit).await; // once per turn — model is now resident
         let (mut tcs, mut recovered) = get_tool_calls(&resp);
         let mut last_resp = resp;
 
@@ -220,16 +266,20 @@ pub async fn run_turn(
             iters += 1;
             messages.push(last_resp.message.clone());
             if recovered {
-                println!(
-                    "  [recovered {} tool-call(s) from text — model lacks native tool_calls]",
+                let msg = format!(
+                    "recovered {} tool-call(s) from text — model lacks native tool_calls",
                     tcs.len()
                 );
-                debug::log(&format!("recovered {} tool-call(s) from text content", tcs.len()));
+                println!("  [{msg}]");
+                debug::log(&msg);
+                send_ev(emit, AgentEvent::Info(msg));
             }
             for tc in &tcs {
                 let name = &tc.function.name;
                 let args = &tc.function.arguments;
-                println!("  → {}({})", name, shown(args));
+                let call = format!("{}({})", name, shown(args));
+                println!("  → {call}");
+                send_ev(emit, AgentEvent::ToolCall(call));
                 debug::audit(&cfg.log_file, name, args);
                 debug::log(&format!("tool-call #{iters} {name} args={args}"));
                 let t0 = Instant::now();
@@ -239,6 +289,7 @@ pub async fn run_turn(
                     println!("    ⏱  {name} took {:.1}s", t0.elapsed().as_secs_f64());
                 }
                 debug::log(&format!("tool-result {name} -> {}", truncate_chars(&result, 2000)));
+                send_ev(emit, AgentEvent::ToolResult(format!("{name}: {}", truncate_chars(&result, 400))));
                 messages.push(ChatMessage::tool_result(
                     name,
                     clip_result(&result, cfg.max_tool_result_chars),
@@ -254,7 +305,10 @@ pub async fn run_turn(
                 }
             };
             debug::log_response(&resp, &format!("mid-loop iter={iters}"));
-            log_perf(&resp, cfg);
+            if let Some(t) = &resp.message.thinking {
+                send_ev(emit, AgentEvent::Thinking(t.clone()));
+            }
+            log_perf(&resp, cfg, emit);
             let g = get_tool_calls(&resp);
             tcs = g.0;
             recovered = g.1;
@@ -264,14 +318,19 @@ pub async fn run_turn(
         // Hit the cap but the model still wants tools -> bounded continuation.
         if !tcs.is_empty() && continuations < cfg.max_continuations {
             continuations += 1;
-            println!(
-                "  [hit {}-tool cap — continuation {}/{}]",
+            let msg = format!(
+                "hit {}-tool cap — continuation {}/{}",
                 cfg.max_tool_iters, continuations, cfg.max_continuations
             );
+            println!("  [{msg}]");
+            send_ev(emit, AgentEvent::Info(msg));
             messages.push(last_resp.message.clone());
             for tc in &tcs {
                 let name = &tc.function.name;
                 let args = &tc.function.arguments;
+                let call = format!("{}({})", name, shown(args));
+                println!("  → {call}");
+                send_ev(emit, AgentEvent::ToolCall(call));
                 debug::audit(&cfg.log_file, name, args);
                 debug::log(&format!("tool-call (continuation {continuations}) {name} args={args}"));
                 let result = run_tool(router, ctx, name, args.clone()).await;
@@ -294,7 +353,9 @@ pub async fn run_turn(
         let mut content = last_resp.message.content.clone();
         if content.trim().is_empty() || capped_out {
             if capped_out {
-                println!("  [tool limit reached — asking the model to write up its findings]");
+                let msg = "tool limit reached — asking the model to write up its findings";
+                println!("  [{msg}]");
+                send_ev(emit, AgentEvent::Info(msg.to_string()));
             }
             if let Some(text) = finalize(client, cfg, messages).await {
                 messages.push(ChatMessage::simple("assistant", text.clone()));
@@ -316,6 +377,8 @@ pub async fn run_turn(
             );
         }
         let tldr = summarize_turn(client, cfg, &content).await;
+        // The final answer is delivered as the return value (the CLI prints it; the GUI thread
+        // wraps it in AgentEvent::Final so error-path early returns are covered too).
         return format!("{tldr}{content}");
     }
 }

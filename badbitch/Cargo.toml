@@ -4,12 +4,28 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "badbitch"
+path = "src/lib.rs"
+
 [[bin]]
 name = "badbitch"
 path = "src/main.rs"
 
+[[bin]]
+name = "badbitch-gui"
+path = "src/bin/gui.rs"
+required-features = ["gui"]
+
+[features]
+default = []
+# The native desktop GUI (egui/eframe). Opt-in so the CLI builds stay lean and dependency-free:
+#   cargo build --release --features gui --bin badbitch-gui
+gui = ["dep:eframe"]
+
 [dependencies]
 badbitch-macros = { path = "../badbitch-macros" }
+eframe = { version = "0.31", optional = true, default-features = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 schemars = { workspace = true }
