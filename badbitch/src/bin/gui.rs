@@ -163,18 +163,7 @@ struct App {
 impl App {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let cfg = Config::load();
-        let models = {
-            let host = cfg.ollama_host.clone();
-            std::thread::spawn(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map(|rt| rt.block_on(badbitch::ollama::list_models(&host)))
-                    .unwrap_or_default()
-            })
-            .join()
-            .unwrap_or_default()
-        };
+        let models = fetch_models(&cfg.ollama_host);
 
         let osint = OSINT_KEYS
             .iter()
@@ -324,6 +313,21 @@ impl App {
             self.running = false;
         }
     }
+}
+
+/// Fetch installed Ollama model names synchronously (used at startup and by the Refresh
+/// button). Blocks briefly on a throwaway runtime — fine for a one-shot action.
+fn fetch_models(host: &str) -> Vec<String> {
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map(|rt| rt.block_on(badbitch::ollama::list_models(&host)))
+            .unwrap_or_default()
+    })
+    .join()
+    .unwrap_or_default()
 }
 
 fn osint_value(cfg: &Config, key: &str) -> String {
@@ -529,15 +533,30 @@ impl App {
             ui.heading("Model");
             ui.horizontal(|ui| {
                 ui.label("Model:").on_hover_text("Ollama model tag to run.");
+                // Always include the currently-configured model so it can never go "missing"
+                // (e.g. if Ollama was down at launch, or a fresh isolated config).
+                let mut options = self.models.clone();
+                if !self.model.is_empty() && !options.contains(&self.model) {
+                    options.insert(0, self.model.clone());
+                }
                 egui::ComboBox::from_id_salt("model_combo")
                     .selected_text(if self.model.is_empty() { "(pick)".to_string() } else { self.model.clone() })
                     .width(420.0)
                     .show_ui(ui, |ui| {
-                        for m in &self.models {
+                        for m in &options {
                             ui.selectable_value(&mut self.model, m.clone(), m);
                         }
                     });
+                if ui.button("🔄 Refresh").on_hover_text("Re-query Ollama for installed models").clicked() {
+                    self.models = fetch_models(&self.ollama_host);
+                }
             });
+            if self.models.is_empty() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(210, 140, 90),
+                    "No models from Ollama — is it running? Start it (or run badbitch-setup), then Refresh. You can also type a model tag below.",
+                );
+            }
             ui.horizontal(|ui| {
                 ui.label("  or type:");
                 ui.add(egui::TextEdit::singleline(&mut self.model).desired_width(420.0));
