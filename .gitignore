@@ -6,5 +6,23 @@ config.ini
 *.sqlite
 *.sqlite-journal
 *audit*.log
+
+# Per-run logs, caches, and collected pages (may contain fetched PII).
+*_debug.log
 badbitch2_debug.log
+badbitch-rs_debug.log
+*_fetch_cache/
 case_docs/
+
+# Case exports — these NAME REAL PEOPLE; never commit them to a public repo.
+*.maltego.entities.csv
+*.maltego.links.csv
+*.graphviz.dot
+*.graphviz.png
+*.neo4j.cypher
+
+# Recon / capture artifacts that sometimes land at the repo root.
+capture.*
+*.ivs
+*.ivs*
+badbitch-rs-full.txt
