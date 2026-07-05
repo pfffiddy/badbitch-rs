@@ -41,6 +41,36 @@ fn send_ev(emit: Option<&Sender<AgentEvent>>, ev: AgentEvent) {
     }
 }
 
+/// Live steering handles a UI can hold to interrupt a run or inject a message mid-turn
+/// (the "talk to it while it's working" / Esc-to-stop controls). The CLI doesn't use these.
+#[derive(Clone, Default)]
+pub struct RunControls {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    inject: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl RunControls {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Signal the running turn to stop as soon as it reaches a safe point.
+    pub fn stop(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn is_stopped(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Queue a user message to be injected into the running turn at the next safe point.
+    pub fn inject(&self, msg: String) {
+        if let Ok(mut q) = self.inject.lock() {
+            q.push(msg);
+        }
+    }
+    fn take_injections(&self) -> Vec<String> {
+        self.inject.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
+    }
+}
+
 fn shown(args: &Value) -> String {
     match args.as_object() {
         Some(map) => map
@@ -221,11 +251,12 @@ pub async fn run_turn(
     cfg: &Config,
     messages: &mut Vec<ChatMessage>,
 ) -> String {
-    run_turn_streaming(client, router, ctx, cfg, messages, None).await
+    run_turn_streaming(client, router, ctx, cfg, messages, None, None).await
 }
 
 /// `_run_turn`: model + tool loop with iteration cap and optional continuations. `emit`, when
-/// present, receives `AgentEvent`s so a UI can show live progress.
+/// present, receives `AgentEvent`s so a UI can show live progress; `controls`, when present,
+/// lets a UI inject messages mid-turn or stop the run.
 pub async fn run_turn_streaming(
     client: &OllamaClient,
     router: &ToolRouter,
@@ -233,13 +264,37 @@ pub async fn run_turn_streaming(
     cfg: &Config,
     messages: &mut Vec<ChatMessage>,
     emit: Option<&Sender<AgentEvent>>,
+    controls: Option<&RunControls>,
 ) -> String {
     let specs = router.tool_specs();
     let mut continuations = 0usize;
     let turn_t0 = Instant::now();
     let mut tool_count = 0usize;
 
+    // Drain any queued injected messages into the conversation; returns true if the user
+    // asked to stop (caller should wrap up). Called at each safe point in the loop.
+    macro_rules! steer {
+        () => {{
+            let mut should_stop = false;
+            if let Some(c) = controls {
+                for m in c.take_injections() {
+                    send_ev(emit, AgentEvent::Info(format!("↩ injected: {m}")));
+                    debug::log(&format!("injected user message: {m}"));
+                    messages.push(ChatMessage::user(m));
+                }
+                should_stop = c.is_stopped();
+            }
+            should_stop
+        }};
+    }
+
     loop {
+        if steer!() {
+            send_ev(emit, AgentEvent::Info("⏹ stopped — writing up what was gathered…".into()));
+            return finalize(client, cfg, messages)
+                .await
+                .unwrap_or_else(|| "[stopped by user]".to_string());
+        }
         debug::log(&format!(
             "==== chat REQUEST [turn] msgs={} tools={} ====",
             messages.len(),
@@ -263,6 +318,12 @@ pub async fn run_turn_streaming(
 
         let mut iters = 0usize;
         while !tcs.is_empty() && iters < cfg.max_tool_iters {
+            if steer!() {
+                send_ev(emit, AgentEvent::Info("⏹ stopped — writing up what was gathered…".into()));
+                return finalize(client, cfg, messages)
+                    .await
+                    .unwrap_or_else(|| "[stopped by user]".to_string());
+            }
             iters += 1;
             messages.push(last_resp.message.clone());
             if recovered {

@@ -8,7 +8,7 @@
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use badbitch::agent::AgentEvent;
+use badbitch::agent::{AgentEvent, RunControls};
 use badbitch::config::{API_KEY_NAMES, Config, write_ini};
 use eframe::egui;
 
@@ -154,10 +154,13 @@ struct App {
     rx: Option<Receiver<AgentEvent>>,
     running: bool,
     run_verbosity: Verbosity,
+    controls: Option<RunControls>, // live stop/inject handle for the current run
+    truncate_display: usize,       // truncate each shown line to N chars (0 = off)
 
     // ── thought window ──
     show_thoughts: bool,
     thoughts_verbosity: Verbosity,
+    inject_text: String, // the "inject a message mid-run" bar
 }
 
 impl App {
@@ -200,9 +203,29 @@ impl App {
             rx: None,
             running: false,
             run_verbosity: Verbosity::Normal,
+            controls: None,
+            truncate_display: 0,
             show_thoughts: false,
             thoughts_verbosity: Verbosity::Verbose,
+            inject_text: String::new(),
         }
+    }
+
+    /// Reload the editable settings + model list from disk (after a save, so the GUI's view
+    /// matches what the next run will use — no restart needed).
+    fn reload_settings(&mut self) {
+        let cfg = Config::load();
+        self.model = cfg.model.clone();
+        self.ollama_host = cfg.ollama_host.clone();
+        self.osint = OSINT_KEYS.iter().map(|k| ((*k).to_string(), osint_value(&cfg, k))).collect();
+        self.gen_opts = GEN_KEYS.iter().map(|k| ((*k).to_string(), gen_value(&cfg, k))).collect();
+        self.keys = API_KEY_NAMES.iter().map(|k| ((*k).to_string(), cfg.key(k))).collect();
+        self.think = match cfg.think {
+            None => ThinkMode::Default,
+            Some(true) => ThinkMode::On,
+            Some(false) => ThinkMode::Off,
+        };
+        self.models = fetch_models(&cfg.ollama_host);
     }
 
     fn save_settings(&mut self) {
@@ -264,6 +287,8 @@ impl App {
         let (tx, rx): (Sender<AgentEvent>, Receiver<AgentEvent>) = channel();
         self.rx = Some(rx);
         self.running = true;
+        let controls = RunControls::new();
+        self.controls = Some(controls.clone());
 
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
@@ -292,11 +317,35 @@ impl App {
                     &cfg,
                     &mut messages,
                     Some(&tx),
+                    Some(&controls),
                 )
                 .await;
                 let _ = tx.send(AgentEvent::Final(ans));
             });
         });
+    }
+
+    /// Ask the running turn to stop (Esc / Stop button).
+    fn stop_run(&mut self) {
+        if let Some(c) = &self.controls {
+            c.stop();
+        }
+    }
+
+    /// Send a message: inject into the running turn, or start a fresh run if idle.
+    fn send_message(&mut self, msg: String) {
+        let msg = msg.trim().to_string();
+        if msg.is_empty() {
+            return;
+        }
+        if self.running {
+            if let Some(c) = &self.controls {
+                c.inject(msg);
+            }
+        } else {
+            self.target = msg;
+            self.start_run();
+        }
     }
 
     fn drain_events(&mut self) {
@@ -398,9 +447,25 @@ fn verbosity_picker(ui: &mut egui::Ui, v: &mut Verbosity) {
     });
 }
 
+/// Sanitize (strip control/binary bytes) then truncate a displayed line to `n` chars
+/// (0 = no truncation). Keeps stray binary from a fetch/shell tool out of the UI.
+fn clip_line(s: &str, n: usize) -> String {
+    let s = badbitch::http::sanitize_text(s);
+    if n == 0 || s.chars().count() <= n {
+        s
+    } else {
+        format!("{}…", s.chars().take(n).collect::<String>())
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
+
+        // Esc stops a running turn (like Claude Code) and lets you type again.
+        if self.running && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.stop_run();
+        }
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -410,12 +475,12 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::Settings, "⚙ Settings");
                 ui.selectable_value(&mut self.tab, Tab::Prompt, "📝 Prompt");
                 ui.separator();
-                if ui.button("🧠 Thought process").clicked() {
+                let tlabel = if self.show_thoughts { "🧠 Thought window: on" } else { "🧠 Thought window" };
+                if ui.button(tlabel).clicked() {
                     self.show_thoughts = !self.show_thoughts;
                 }
                 ui.separator();
-                let status = if self.running { "● running" } else { "idle" };
-                ui.label(status);
+                ui.label(if self.running { "● running" } else { "idle" });
             });
         });
 
@@ -425,24 +490,24 @@ impl eframe::App for App {
             Tab::Run => self.run_ui(ui),
         });
 
-        // Thought-process window (toggleable "second window").
-        let mut open = self.show_thoughts;
-        egui::Window::new("🧠 Thought process & commands")
-            .open(&mut open)
-            .default_size([620.0, 620.0])
-            .show(ctx, |ui| {
-                verbosity_picker(ui, &mut self.thoughts_verbosity);
-                ui.separator();
-                egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
-                    for ev in &self.events {
-                        if passes(ev, self.thoughts_verbosity) {
-                            let (color, prefix, text) = event_label(ev);
-                            ui.colored_label(color, format!("{prefix}{text}"));
-                        }
-                    }
-                });
+        // Thought process — a REAL separate OS window (immediate viewport), movable/closable,
+        // with its own inject bar, Stop, and verbosity.
+        if self.show_thoughts {
+            let vid = egui::ViewportId::from_hash_of("badbitch-thoughts");
+            let builder = egui::ViewportBuilder::default()
+                .with_title("badbitch-rs — Thought process")
+                .with_inner_size([700.0, 740.0]);
+            ctx.show_viewport_immediate(vid, builder, |vctx, _class| {
+                egui::TopBottomPanel::top("inject_bar").show(vctx, |ui| self.thoughts_bar(ui));
+                egui::CentralPanel::default().show(vctx, |ui| self.thoughts_body(ui));
+                if vctx.input(|i| i.viewport().close_requested()) {
+                    self.show_thoughts = false;
+                }
+                if self.running {
+                    vctx.request_repaint_after(std::time::Duration::from_millis(120));
+                }
             });
-        self.show_thoughts = open;
+        }
 
         if self.running {
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
@@ -451,6 +516,48 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Top bar of the thought window: inject/run box, Stop, verbosity. This is the "talk to
+    /// it while running" bar the user asked for.
+    fn thoughts_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let hint = if self.running {
+                "inject a note / redirect the agent, then Enter…"
+            } else {
+                "type a target and Enter to start a run…"
+            };
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.inject_text)
+                    .desired_width(430.0)
+                    .hint_text(hint),
+            );
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let label = if self.running { "Inject" } else { "Run" };
+            if ui.button(label).clicked() || enter {
+                let m = std::mem::take(&mut self.inject_text);
+                self.send_message(m);
+            }
+            if self.running && ui.button("⏹ Stop").clicked() {
+                self.stop_run();
+            }
+        });
+        verbosity_picker(ui, &mut self.thoughts_verbosity);
+    }
+
+    /// Scrolling body of the thought window: reasoning + commands + events.
+    fn thoughts_body(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for ev in &self.events {
+                    if passes(ev, self.thoughts_verbosity) {
+                        let (color, prefix, text) = event_label(ev);
+                        ui.colored_label(color, format!("{prefix}{}", clip_line(&text, self.truncate_display)));
+                    }
+                }
+            });
+    }
+
     fn run_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Target:");
@@ -462,6 +569,9 @@ impl App {
             let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (ui.button("▶ Run").clicked() || enter) && !self.running {
                 self.start_run();
+            }
+            if self.running && ui.button("⏹ Stop").clicked() {
+                self.stop_run();
             }
             if ui.button("Clear").clicked() {
                 self.events.clear();
@@ -482,7 +592,7 @@ impl App {
                         ui.add_space(6.0);
                         ui.separator();
                     }
-                    ui.colored_label(color, format!("{prefix}{text}"));
+                    ui.colored_label(color, format!("{prefix}{}", clip_line(&text, self.truncate_display)));
                 }
             });
     }
@@ -520,12 +630,17 @@ impl App {
         ui.horizontal(|ui| {
             if ui.button("💾 Save settings").clicked() {
                 self.save_settings();
+                self.reload_settings(); // refresh the view so it matches what the next run uses
             }
             if !self.settings_status.is_empty() {
                 ui.label(&self.settings_status);
             }
         });
-        ui.label("Saved to ~/.config/badbitch-rs/config.ini. Restart a run (or the GUI) to apply.");
+        ui.label("Saved to ~/.config/badbitch-rs/config.ini and applied on the NEXT run — no restart needed (each run reloads the config).");
+        ui.horizontal(|ui| {
+            ui.label("Truncate displayed lines to:").on_hover_text("Shorten long lines in the Run/Thought views. 0 = show full text.");
+            ui.add(egui::DragValue::new(&mut self.truncate_display).range(0..=100_000).suffix(" chars"));
+        });
         ui.separator();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

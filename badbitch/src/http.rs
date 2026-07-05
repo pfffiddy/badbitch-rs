@@ -156,19 +156,59 @@ static RE_SCRIPT: LazyLock<Regex> = LazyLock::new(|| {
 static RE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<[^>]+>").unwrap());
 static RE_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t\f\r]+").unwrap());
 
+/// True if a Content-Type is not text we can meaningfully extract (PDF, image, font, audio,
+/// video, archive, generic octet-stream). text/*, html, json, xml, csv, js are treated as text.
+fn is_binary_ctype(ctype: &str) -> bool {
+    if ctype.is_empty() {
+        return false; // unknown — let the content-based check decide
+    }
+    let textual = ctype.starts_with("text/")
+        || ctype.contains("html")
+        || ctype.contains("json")
+        || ctype.contains("xml")
+        || ctype.contains("javascript")
+        || ctype.contains("csv")
+        || ctype.contains("plain");
+    !textual
+}
+
+/// Strip control characters (keep newline/tab) and the U+FFFD replacement char, so binary
+/// bytes decoded lossily as text never reach the model or the UI as garbage.
+pub fn sanitize_text(s: &str) -> String {
+    s.chars()
+        .filter(|&c| c == '\n' || c == '\t' || (!c.is_control() && c != '\u{FFFD}'))
+        .collect()
+}
+
+/// True if a sample of `s` is mostly non-printable — i.e. it's really binary (a PDF, image,
+/// font, …) that was mislabeled or fetched directly, not text.
+pub fn looks_binary(s: &str) -> bool {
+    let sample: String = s.chars().take(4000).collect();
+    let total = sample.chars().count();
+    if total < 32 {
+        return false;
+    }
+    let bad = sample
+        .chars()
+        .filter(|&c| c == '\u{FFFD}' || (c.is_control() && c != '\n' && c != '\t' && c != '\r'))
+        .count();
+    bad * 5 > total // >20% junk
+}
+
 /// `_extract` (badbitch2.py:361): clean text from HTML. We replicate the bs4 fallback path
 /// (strip script/style/noscript, then tags, then collapse to non-empty space-joined lines) —
-/// trafilatura has no drop-in Rust equivalent.
+/// trafilatura has no drop-in Rust equivalent. Output is sanitized of control/binary bytes.
 pub fn extract(html: &str) -> String {
     let no_scripts = RE_SCRIPT.replace_all(html, " ");
     let no_tags = RE_TAG.replace_all(&no_scripts, " ");
     let decoded = decode_entities(&no_tags);
-    decoded
+    let joined = decoded
         .lines()
         .map(|l| RE_WS.replace_all(l.trim(), " ").to_string())
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    sanitize_text(&joined)
 }
 
 fn decode_entities(s: &str) -> String {
@@ -239,6 +279,20 @@ pub async fn fetch_url_full(client: &reqwest::Client, cfg: &Config, url: &str) -
     let html = match get(client, cfg, url, &[], &[("User-Agent".into(), ua)]).await {
         Ok(resp) => {
             let code = resp.status().as_u16();
+            // Bail early on non-text content types (PDF, images, fonts, archives, …) so we
+            // never dump raw binary bytes into the dossier.
+            let ctype = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_lowercase();
+            if is_binary_ctype(&ctype) {
+                return format!(
+                    "[binary content: {} — not extracted as text. Download it directly or use a dedicated parser.]",
+                    if ctype.is_empty() { "unknown type" } else { &ctype }
+                );
+            }
             let body = resp.text().await.unwrap_or_default();
             if code == 200 && body.len() > 500 && !body.to_lowercase().contains("captcha") {
                 Some(body)
@@ -257,6 +311,10 @@ pub async fn fetch_url_full(client: &reqwest::Client, cfg: &Config, url: &str) -
             "[fetch failed] {note}(no curl_cffi/impersonation in this build). If JS site, try fetch_rendered."
         );
     };
+    // Catch mislabeled binary (e.g. a PDF served as text/html) by content, not just header.
+    if looks_binary(&html) {
+        return format!("[binary/non-text content at {url} — not extracted]");
+    }
     let out = extract(&html);
     let head = out.chars().take(1500).collect::<String>().to_lowercase();
     if head.contains("captcha") || out.len() < 200 {
