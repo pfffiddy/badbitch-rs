@@ -262,3 +262,33 @@ pub fn write_ini(
     }
     std::fs::write(path, out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opt_value_typing() {
+        assert_eq!(parse_opt_value("42"), Value::from(42));
+        assert_eq!(parse_opt_value("0.7"), Value::from(0.7));
+        assert_eq!(parse_opt_value("true"), Value::Bool(true));
+        assert_eq!(parse_opt_value("false"), Value::Bool(false));
+        assert_eq!(parse_opt_value("a, b"), Value::Array(vec![Value::from("a"), Value::from("b")]));
+        assert_eq!(parse_opt_value("qwen3"), Value::from("qwen3"));
+    }
+
+    #[test]
+    fn host_normalization() {
+        assert_eq!(normalize_host("127.0.0.1:11434"), "http://127.0.0.1:11434");
+        assert_eq!(normalize_host("http://x:11434/"), "http://x:11434");
+        assert_eq!(normalize_host("https://h/"), "https://h");
+    }
+
+    #[test]
+    fn expand_tilde() {
+        let p = expand("~/foo");
+        assert!(p.ends_with("foo"));
+        assert!(!p.to_string_lossy().starts_with('~'));
+        assert_eq!(expand("/abs/path"), std::path::PathBuf::from("/abs/path"));
+    }
+}

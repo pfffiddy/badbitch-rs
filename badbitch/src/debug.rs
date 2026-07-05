@@ -14,12 +14,13 @@ static LOG: LazyLock<Mutex<Option<File>>> = LazyLock::new(|| Mutex::new(None));
 /// Truncate (overwrite) the debug log for a fresh session.
 pub fn init(path: &Path) {
     if let Ok(f) = File::create(path) {
-        *LOG.lock().unwrap() = Some(f);
+        *LOG.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
     }
 }
 
 pub fn log(msg: &str) {
-    if let Some(f) = LOG.lock().unwrap().as_mut() {
+    // Logging must never crash the agent — recover a poisoned lock rather than panicking.
+    if let Some(f) = LOG.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         let _ = writeln!(f, "{}  {}", chrono::Utc::now().to_rfc3339(), msg);
     }
 }

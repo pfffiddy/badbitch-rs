@@ -163,8 +163,51 @@ struct App {
     inject_text: String, // the "inject a message mid-run" bar
 }
 
+/// Register broad-coverage system fonts as fallbacks so non-Latin text (Cyrillic, Greek,
+/// CJK, Arabic, …) renders instead of "tofu" boxes. Uses whatever the OS already ships —
+/// no bundled binary. Silently does nothing if none are found (egui defaults remain).
+fn install_system_fonts(ctx: &egui::Context) {
+    // Single-file ttf/otf only (egui/ab_glyph can't parse .ttc collections).
+    let candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", // Latin + Cyrillic + Greek (Kali/Debian)
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf", // Fedora/Arch layout
+    ];
+    let mut fonts = egui::FontDefinitions::default();
+    let mut added: Vec<String> = Vec::new();
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            let name = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("sysfont")
+                .to_string();
+            fonts
+                .font_data
+                .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+            added.push(name);
+        }
+    }
+    if added.is_empty() {
+        return;
+    }
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        let list = fonts.families.entry(family).or_default();
+        for name in &added {
+            list.push(name.clone()); // append as fallback (after the default fonts)
+        }
+    }
+    ctx.set_fonts(fonts);
+}
+
 impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_system_fonts(&cc.egui_ctx);
         let cfg = Config::load();
         let models = fetch_models(&cfg.ollama_host);
 
@@ -539,23 +582,47 @@ impl App {
             if self.running && ui.button("⏹ Stop").clicked() {
                 self.stop_run();
             }
+            if ui.button("📋 Copy all").clicked() {
+                ui.ctx().copy_text(self.transcript(self.thoughts_verbosity));
+            }
         });
         verbosity_picker(ui, &mut self.thoughts_verbosity);
     }
 
-    /// Scrolling body of the thought window: reasoning + commands + events.
-    fn thoughts_body(&mut self, ui: &mut egui::Ui) {
+    /// Build the filtered transcript as one string (for a single selectable text area).
+    fn transcript(&self, v: Verbosity) -> String {
+        self.events
+            .iter()
+            .filter(|e| passes(e, v))
+            .map(|e| {
+                let (_c, prefix, text) = event_label(e);
+                format!("{prefix}{}", clip_line(&text, self.truncate_display))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Render the transcript in ONE read-only-ish multiline text area, so the whole thing is
+    /// selectable (drag, Ctrl+A) and copyable (Ctrl+C). Auto-tails only while running, so a
+    /// finished run stays put while you select. Edits are discarded (regenerated each frame).
+    fn transcript_view(&self, ui: &mut egui::Ui, v: Verbosity) {
+        let mut text = self.transcript(v);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .stick_to_bottom(true)
+            .stick_to_bottom(self.running)
             .show(ui, |ui| {
-                for ev in &self.events {
-                    if passes(ev, self.thoughts_verbosity) {
-                        let (color, prefix, text) = event_label(ev);
-                        ui.colored_label(color, format!("{prefix}{}", clip_line(&text, self.truncate_display)));
-                    }
-                }
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(24)
+                        .font(egui::TextStyle::Monospace),
+                );
             });
+    }
+
+    /// Scrolling body of the thought window: reasoning + commands + events (selectable).
+    fn thoughts_body(&mut self, ui: &mut egui::Ui) {
+        self.transcript_view(ui, self.thoughts_verbosity);
     }
 
     fn run_ui(&mut self, ui: &mut egui::Ui) {
@@ -577,24 +644,15 @@ impl App {
                 self.events.clear();
             }
         });
-        verbosity_picker(ui, &mut self.run_verbosity);
+        ui.horizontal(|ui| {
+            verbosity_picker(ui, &mut self.run_verbosity);
+            ui.separator();
+            if ui.button("📋 Copy all").clicked() {
+                ui.ctx().copy_text(self.transcript(self.run_verbosity));
+            }
+        });
         ui.separator();
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for ev in &self.events {
-                    if !passes(ev, self.run_verbosity) {
-                        continue;
-                    }
-                    let (color, prefix, text) = event_label(ev);
-                    if matches!(ev, AgentEvent::Final(_)) {
-                        ui.add_space(6.0);
-                        ui.separator();
-                    }
-                    ui.colored_label(color, format!("{prefix}{}", clip_line(&text, self.truncate_display)));
-                }
-            });
+        self.transcript_view(ui, self.run_verbosity);
     }
 
     fn prompt_ui(&mut self, ui: &mut egui::Ui) {

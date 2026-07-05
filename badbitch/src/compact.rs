@@ -44,3 +44,40 @@ pub fn compact(messages: &[ChatMessage], num_ctx: i64) -> Vec<ChatMessage> {
     out.extend(kept);
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ollama::ChatMessage;
+
+    #[test]
+    fn keeps_all_when_small() {
+        let msgs = vec![ChatMessage::system("s"), ChatMessage::user("u")];
+        assert_eq!(compact(&msgs, 20480).len(), 2);
+    }
+
+    #[test]
+    fn drops_old_keeps_system_and_marks_truncation() {
+        let mut msgs = vec![ChatMessage::system("SYSTEM")];
+        for _ in 0..200 {
+            msgs.push(ChatMessage::user("x".repeat(500)));
+        }
+        let out = compact(&msgs, 8000); // small window forces compaction
+        assert_eq!(out[0].role, "system");
+        assert_eq!(out[0].content, "SYSTEM");
+        assert!(out.len() < msgs.len());
+        assert!(out.iter().any(|m| m.content.contains("truncated to fit")));
+    }
+
+    #[test]
+    fn never_leads_with_orphan_tool() {
+        let mut msgs = vec![ChatMessage::system("SYSTEM")];
+        for _ in 0..200 {
+            msgs.push(ChatMessage::simple("assistant", "a".repeat(300)));
+            msgs.push(ChatMessage::tool_result("t", "r".repeat(300)));
+        }
+        let out = compact(&msgs, 8000);
+        // The first kept message after the system + marker must not be an orphan tool result.
+        assert!(out.get(2).map(|m| m.role != "tool").unwrap_or(true));
+    }
+}
