@@ -114,3 +114,43 @@ pub fn classify_target(target: &str) -> Classified {
 
     info
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn email_ip_domain() {
+        assert_eq!(classify_target("bob@example.com").kind, "email");
+        assert_eq!(classify_target("8.8.8.8").kind, "ip");
+        assert_eq!(classify_target("example.com").kind, "domain");
+    }
+
+    #[test]
+    fn person_with_dob_and_address() {
+        let c = classify_target("Jane Q Public 8-13-92 16303 N Aster");
+        assert_eq!(c.kind, "person");
+        assert!(c.name.contains("Jane"));
+        assert!(c.dob.contains("92"));
+        assert!(!c.address.is_empty());
+    }
+
+    #[test]
+    fn bare_address_is_address_not_person() {
+        let c = classify_target("4207 Valley View Rd");
+        assert_eq!(c.kind, "address");
+    }
+
+    #[test]
+    fn username_fallback() {
+        assert_eq!(classify_target("n1ght_0wl").kind, "username");
+    }
+
+    #[test]
+    fn helpers() {
+        assert!(is_ip("1.2.3.4"));
+        assert!(!is_ip("1.2.3"));
+        assert!(looks_domain("a.co"));
+        assert!(!looks_domain("1.2.3.4"));
+    }
+}

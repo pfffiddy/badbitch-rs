@@ -64,16 +64,27 @@ cargo build --release --features gui --bin badbitch-gui
 ./target/release/badbitch-gui
 ```
 
-- **Run** tab — enter a target, watch tool calls, per-turn perf + GPU/CPU split, and the
-  final dossier stream in live, with a Quiet/Normal/Verbose filter.
-- **Settings** tab — edit every param, pick a model from your installed Ollama models,
-  a **Thinking: Default / On / Off** toggle, and the full set of Ollama generation options
-  (num_ctx, temperature, top_k, min_p, mirostat, num_gpu, …). Saves to
-  `~/.config/badbitch-rs/config.ini`.
+- **Run** tab — enter a target; tool calls, per-turn perf + GPU/CPU split, and the final
+  dossier stream in live with a Quiet/Normal/Verbose filter. Output is one **selectable /
+  copyable** text area (drag-select, Ctrl+A, Ctrl+C, or the **📋 Copy all** button); it
+  auto-tails while running and stays put once finished so you can select. **Esc** or **⏹ Stop**
+  interrupts a run (it wraps up with what it gathered), then you can type again.
+- **Settings** tab — edit **every** param; pick a model from your installed Ollama models
+  (**🔄 Refresh** re-queries Ollama; the current model always stays listed); a **Thinking:
+  Default / On / Off** toggle (Off disables a reasoning model's thinking for speed); and the
+  full set of Ollama generation options (num_ctx, temperature, top_k, min_p, mirostat, num_gpu,
+  seed, num_predict, …). A **Truncate displayed lines** control shortens long output lines.
+  Saves to `~/.config/badbitch-rs/config.ini` and applies on the **next run — no restart**.
 - **Prompt** tab — view/edit the system prompt; save writes an override file, reset restores
   the built-in default.
-- **🧠 Thought process** button — opens a second window showing the model's reasoning and
-  every command it issues, with its own verbosity filter.
+- **🧠 Thought process** — opens a **real separate window** (movable/closable) showing the
+  model's reasoning and every command it issues, with its own verbosity filter and a **top
+  inject bar**: type a note mid-run to **steer the agent while it's working** (or start a run
+  when idle).
+
+The GUI loads broad-coverage system fonts (DejaVu/Noto if present) as fallbacks so non-Latin
+text renders instead of empty boxes. Binary/PDF fetches are detected and never dumped as raw
+bytes.
 
 ### CLI
 
@@ -224,10 +235,20 @@ echo 'source ~/badbitch-rs/scripts/shell-aliases.sh' >> ~/.bashrc   # or ~/.zshr
 ## Development
 
 ```bash
-cargo test           # unit tests (extraction, relationship model, compaction…)
-cargo clippy --tests # lint (the tree is kept warning-free)
+cargo test           # 30 unit tests (classify, compact, config, http, exporters, recovery)
+cargo clippy --workspace --all-targets -- -D warnings   # kept warning-free
 cargo build
 ```
+
+CI (`.github/workflows/ci.yml`) runs clippy + tests and a separate GUI build on every push/PR.
+
+## Security / trust model
+
+`run_shell` and `python_eval` execute **arbitrary shell / Python that the LLM writes** — this
+is by design (an operator OSINT toolkit driving Kali utilities), but it means a compromised or
+misbehaving model has code execution on your box. Every invocation is recorded in the audit log
+(`~/.local/share/badbitch-rs/osint_audit.log`). Run against a model and targets you trust, and
+prefer running in a VM/container for untrusted work.
 
 ## Disclaimer
 

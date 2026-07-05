@@ -22,7 +22,8 @@ static LAST_CALL: LazyLock<Mutex<HashMap<String, Instant>>> =
 /// call tagged `bucket` (e.g. Nominatim 1/s).
 pub async fn rate_limit(bucket: &str, min_interval: f64) {
     let wait = {
-        let mut map = LAST_CALL.lock().unwrap();
+        // Recover the guard even if a previous holder panicked (don't propagate poison).
+        let mut map = LAST_CALL.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         let elapsed = map.get(bucket).map(|t| now.duration_since(*t).as_secs_f64());
         let wait = match elapsed {
@@ -38,7 +39,7 @@ pub async fn rate_limit(bucket: &str, min_interval: f64) {
         tokio::time::sleep(Duration::from_secs_f64(wait)).await;
         LAST_CALL
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(bucket.to_string(), Instant::now());
     }
 }
@@ -404,5 +405,45 @@ pub async fn resp_json_compact(resp: reqwest::Response, max_chars: usize) -> Str
             "[not JSON, status={code}]\n{}",
             crate::util::truncate_chars(&text, 3000)
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_control_and_replacement() {
+        assert_eq!(sanitize_text("a\u{0}b\u{FFFD}c"), "abc");
+        assert_eq!(sanitize_text("keep\nnewline\ttab"), "keep\nnewline\ttab");
+    }
+
+    #[test]
+    fn binary_content_types() {
+        assert!(is_binary_ctype("application/pdf"));
+        assert!(is_binary_ctype("image/png"));
+        assert!(is_binary_ctype("font/woff2"));
+        assert!(!is_binary_ctype("text/html; charset=utf-8"));
+        assert!(!is_binary_ctype("application/json"));
+        assert!(!is_binary_ctype("")); // unknown -> defer to content check
+    }
+
+    #[test]
+    fn looks_binary_detects_junk() {
+        let junk = "\u{FFFD}".repeat(200);
+        assert!(looks_binary(&junk));
+        assert!(!looks_binary(
+            "this is normal readable page text, long enough to sample properly"
+        ));
+    }
+
+    #[test]
+    fn extract_drops_scripts_and_tags() {
+        let html = "<html><script>bad()</script><p>Hello <b>world</b></p></html>";
+        let out = extract(html);
+        assert!(out.contains("Hello"));
+        assert!(out.contains("world"));
+        assert!(!out.contains("bad()"));
+        assert!(!out.contains('<'));
     }
 }
