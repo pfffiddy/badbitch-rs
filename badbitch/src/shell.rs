@@ -30,6 +30,7 @@ pub async fn run(program: &str, args: &[&str], timeout_secs: u64) -> std::io::Re
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true) // don't orphan the child if we time out
         .spawn()?;
 
     match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output()).await {
@@ -57,6 +58,7 @@ pub async fn run_shell_line(command: &str, cwd: &std::path::Path, timeout_secs: 
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true) // don't orphan the child if we time out
         .spawn();
     let child = match child {
         Ok(c) => c,
