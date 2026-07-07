@@ -96,6 +96,26 @@ const GEN_KEYS: &[&str] = &[
 ];
 const CANONICAL_GEN: &[&str] = &["num_ctx", "temperature", "top_p", "repeat_penalty"];
 
+// Ollama SERVER environment variables (applied by restarting the server, not per request).
+const OLLAMA_ENV_KEYS: &[&str] = &[
+    "OLLAMA_KV_CACHE_TYPE",
+    "OLLAMA_FLASH_ATTENTION",
+    "OLLAMA_KEEP_ALIVE",
+    "OLLAMA_NUM_PARALLEL",
+    "OLLAMA_MAX_LOADED_MODELS",
+];
+
+fn describe_env(key: &str) -> &'static str {
+    match key {
+        "OLLAMA_KV_CACHE_TYPE" => "KV cache quantization: q8_0 halves KV memory (fit more context on GPU) with tiny quality loss; q4_0 is smaller still; f16 = full precision.",
+        "OLLAMA_FLASH_ATTENTION" => "1 = enable flash attention (less KV memory, faster). 0 = off.",
+        "OLLAMA_KEEP_ALIVE" => "How long a model stays loaded when idle (e.g. 30m, 1h, or -1 to keep forever).",
+        "OLLAMA_NUM_PARALLEL" => "Parallel requests per model (raises KV memory).",
+        "OLLAMA_MAX_LOADED_MODELS" => "How many models can be resident at once.",
+        _ => "",
+    }
+}
+
 fn describe(key: &str) -> &'static str {
     match key {
         "num_ctx" => "Context window (tokens). Larger = more memory + VRAM. 20480 fits a 12GB GPU for a 14B.",
@@ -140,9 +160,11 @@ struct App {
     think: ThinkMode,
     osint: Vec<(String, String)>, // OSINT_KEYS order
     gen_opts: Vec<(String, String)>,   // GEN_KEYS order
+    oenv: Vec<(String, String)>,  // OLLAMA_ENV_KEYS order (server env vars)
     keys: Vec<(String, String)>,  // API_KEY_NAMES order
     models: Vec<String>,          // installed Ollama models
     settings_status: String,
+    ollama_env_status: String,
 
     // ── prompt ──
     prompt_text: String,
@@ -219,6 +241,10 @@ impl App {
             .iter()
             .map(|k| ((*k).to_string(), gen_value(&cfg, k)))
             .collect();
+        let oenv = OLLAMA_ENV_KEYS
+            .iter()
+            .map(|k| ((*k).to_string(), cfg.ollama_env.get(*k).cloned().unwrap_or_default()))
+            .collect();
         let keys = API_KEY_NAMES
             .iter()
             .map(|k| ((*k).to_string(), cfg.key(k)))
@@ -236,9 +262,11 @@ impl App {
             think,
             osint,
             gen_opts,
+            oenv,
             keys,
             models,
             settings_status: String::new(),
+            ollama_env_status: String::new(),
             prompt_text: badbitch::prompt::base_prompt(),
             prompt_status: String::new(),
             target: String::new(),
@@ -262,6 +290,10 @@ impl App {
         self.ollama_host = cfg.ollama_host.clone();
         self.osint = OSINT_KEYS.iter().map(|k| ((*k).to_string(), osint_value(&cfg, k))).collect();
         self.gen_opts = GEN_KEYS.iter().map(|k| ((*k).to_string(), gen_value(&cfg, k))).collect();
+        self.oenv = OLLAMA_ENV_KEYS
+            .iter()
+            .map(|k| ((*k).to_string(), cfg.ollama_env.get(*k).cloned().unwrap_or_default()))
+            .collect();
         self.keys = API_KEY_NAMES.iter().map(|k| ((*k).to_string(), cfg.key(k))).collect();
         self.think = match cfg.think {
             None => ThinkMode::Default,
@@ -303,10 +335,19 @@ impl App {
 
         let keys_kv: Vec<(String, String)> = self.keys.clone();
 
+        // Ollama server env vars — remembered so the GUI can re-show them and re-apply.
+        let oenv_kv: Vec<(String, String)> = self
+            .oenv
+            .iter()
+            .filter(|(_, v)| !v.trim().is_empty())
+            .map(|(k, v)| (k.clone(), v.trim().to_string()))
+            .collect();
+
         let sections: Vec<(&str, Vec<(String, String)>)> = vec![
             ("model", vec![("name".to_string(), self.model.clone())]),
             ("osint", osint_kv),
             ("model_options", mopts),
+            ("ollama_env", oenv_kv),
             ("api_keys", keys_kv),
         ];
 
@@ -315,6 +356,69 @@ impl App {
                 self.settings_status = format!("Saved to {}", Config::config_path().display());
             }
             Err(e) => self.settings_status = format!("Save failed: {e}"),
+        }
+    }
+
+    /// Non-empty (KEY, VALUE) env pairs currently entered.
+    fn oenv_pairs(&self) -> Vec<(String, String)> {
+        self.oenv
+            .iter()
+            .filter(|(_, v)| !v.trim().is_empty())
+            .map(|(k, v)| (k.clone(), v.trim().to_string()))
+            .collect()
+    }
+
+    /// The shell commands that write a systemd drop-in and restart Ollama, for the "Copy"
+    /// fallback (users whose Ollama isn't a systemd service can adapt these).
+    fn restart_commands(&self) -> String {
+        let pairs = self.oenv_pairs();
+        if pairs.is_empty() {
+            return "# No Ollama server env vars set.".to_string();
+        }
+        let lines: String = pairs
+            .iter()
+            .map(|(k, v)| format!("Environment=\"{k}={v}\"\n"))
+            .collect();
+        format!(
+            "sudo mkdir -p /etc/systemd/system/ollama.service.d\n\
+             sudo tee /etc/systemd/system/ollama.service.d/badbitch.conf >/dev/null <<'EOF'\n\
+             [Service]\n{lines}EOF\n\
+             sudo systemctl daemon-reload\n\
+             sudo systemctl restart ollama"
+        )
+    }
+
+    /// Write the systemd drop-in and restart Ollama via pkexec (graphical admin prompt).
+    /// These are SERVER env vars — they only take effect after the server restarts.
+    fn apply_ollama_env(&mut self) {
+        let pairs = self.oenv_pairs();
+        if pairs.is_empty() {
+            self.ollama_env_status = "Nothing to apply (no env vars set).".into();
+            return;
+        }
+        let lines: String = pairs
+            .iter()
+            .map(|(k, v)| format!("Environment=\"{k}={v}\"\n"))
+            .collect();
+        let script = format!(
+            "set -e\n\
+             mkdir -p /etc/systemd/system/ollama.service.d\n\
+             cat > /etc/systemd/system/ollama.service.d/badbitch.conf <<'EOF'\n\
+             [Service]\n{lines}EOF\n\
+             systemctl daemon-reload\n\
+             systemctl restart ollama"
+        );
+        match std::process::Command::new("pkexec").arg("sh").arg("-c").arg(&script).status() {
+            Ok(s) if s.success() => {
+                self.ollama_env_status = "Applied — Ollama restarted with the new server settings.".into();
+            }
+            Ok(s) => {
+                self.ollama_env_status =
+                    format!("pkexec exited with {s} — cancelled, or Ollama isn't a systemd service. Use Copy commands instead.");
+            }
+            Err(e) => {
+                self.ollama_env_status = format!("Couldn't launch pkexec ({e}). Use Copy commands instead.");
+            }
         }
     }
 
@@ -754,6 +858,51 @@ impl App {
                     ui.end_row();
                 }
             });
+
+            ui.add_space(8.0);
+            ui.heading("Ollama server (KV cache / flash attention)");
+            ui.label("These are SERVER env vars — they take effect only after Ollama restarts, not per run. Set q8_0 KV cache + flash attention to fit more context on the GPU.");
+            egui::Grid::new("oenv_grid").num_columns(2).striped(true).show(ui, |ui| {
+                for (k, v) in self.oenv.iter_mut() {
+                    ui.label(k.as_str()).on_hover_text(describe_env(k));
+                    match k.as_str() {
+                        "OLLAMA_KV_CACHE_TYPE" => {
+                            egui::ComboBox::from_id_salt("kv_cache_combo")
+                                .selected_text(if v.is_empty() { "(default / f16)".to_string() } else { v.clone() })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(v, String::new(), "(default / f16)");
+                                    ui.selectable_value(v, "q8_0".to_string(), "q8_0 (half KV, recommended)");
+                                    ui.selectable_value(v, "q4_0".to_string(), "q4_0 (smallest)");
+                                    ui.selectable_value(v, "f16".to_string(), "f16 (full precision)");
+                                });
+                        }
+                        "OLLAMA_FLASH_ATTENTION" => {
+                            egui::ComboBox::from_id_salt("flash_attn_combo")
+                                .selected_text(if v.is_empty() { "(default)".to_string() } else { v.clone() })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(v, String::new(), "(default)");
+                                    ui.selectable_value(v, "1".to_string(), "1 (on, recommended)");
+                                    ui.selectable_value(v, "0".to_string(), "0 (off)");
+                                });
+                        }
+                        _ => {
+                            ui.add(egui::TextEdit::singleline(v).desired_width(300.0).hint_text(describe_env(k)));
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("⚡ Apply & restart Ollama (admin)").on_hover_text("Writes a systemd drop-in and restarts Ollama via pkexec.").clicked() {
+                    self.apply_ollama_env();
+                }
+                if ui.button("📋 Copy restart commands").on_hover_text("Copy the shell commands to apply these manually.").clicked() {
+                    ui.ctx().copy_text(self.restart_commands());
+                }
+            });
+            if !self.ollama_env_status.is_empty() {
+                ui.label(&self.ollama_env_status);
+            }
 
             ui.add_space(8.0);
             ui.heading("Agent / OSINT");

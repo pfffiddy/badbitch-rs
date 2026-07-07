@@ -50,6 +50,10 @@ pub struct Config {
     /// [model_options] — arbitrary Ollama generation options (temperature, top_k, num_gpu,
     /// mirostat, …) passed straight through in the chat request's `options`.
     pub model_options: serde_json::Map<String, serde_json::Value>,
+    /// [ollama_env] — remembered Ollama SERVER env vars (OLLAMA_KV_CACHE_TYPE,
+    /// OLLAMA_FLASH_ATTENTION, …). These aren't sent per-request; the GUI applies them by
+    /// restarting the Ollama server. Stored here only so the GUI remembers them.
+    pub ollama_env: std::collections::BTreeMap<String, String>,
     /// UA rotation pool for per-request header variation (badbitch2.py:129).
     pub ua_pool: Vec<String>,
 }
@@ -132,6 +136,21 @@ impl Config {
             }
         }
 
+        // [ollama_env] — remembered server env vars (strings, upper-cased keys).
+        let mut ollama_env = std::collections::BTreeMap::new();
+        if let Some(map) = ini.get_map()
+            && let Some(sec) = map.get("ollama_env")
+        {
+            for (k, v) in sec {
+                if let Some(v) = v {
+                    let v = v.trim();
+                    if !v.is_empty() {
+                        ollama_env.insert(k.to_uppercase(), v.to_string());
+                    }
+                }
+            }
+        }
+
         Config {
             config_path: path,
             // A 14B abliterated model — fits a 12 GB GPU ~100% (no CPU offload); matches the
@@ -166,6 +185,7 @@ impl Config {
             summarize: getb("summary", true),
             think,
             model_options,
+            ollama_env,
             ua_pool: vec![
                 UA.to_string(),
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".into(),
