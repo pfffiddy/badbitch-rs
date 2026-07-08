@@ -17,6 +17,10 @@ eframe = { version = "0.29", default-features = false, features = [
     "android-game-activity",
 ] }
 android-activity = { version = "0.6", features = ["game-activity"] }
+# Injecting the AndroidApp into eframe's event loop needs winit's Android
+# extension trait; pin the same backend eframe 0.29 uses (winit 0.30 +
+# android-game-activity) so the AndroidApp types unify.
+winit = { version = "0.30", default-features = false, features = ["android-game-activity"] }
 log = "0.4"
 android_logger = "0.14"
 # Call into the Java Activity (to open the system file picker) and receive the

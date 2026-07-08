@@ -11,6 +11,7 @@ use eframe::{NativeOptions, Renderer};
 use llm_desk_core::remote::client::RemoteSession;
 use llm_desk_ui::{Frontend, UiApp};
 use std::sync::{Arc, OnceLock};
+use winit::platform::android::EventLoopBuilderExtAndroid;
 
 /// The live session, stashed so the JNI file-picked callback can push an
 /// upload into it. Set once at startup.
@@ -54,8 +55,12 @@ fn android_main(app: AndroidApp) {
         .map(|dpi| (dpi as f32 / 160.0).clamp(1.0, 3.0))
         .unwrap_or(2.0);
 
+    // eframe 0.29 has no `android_app` field — the AndroidApp is handed to
+    // winit's event loop via the builder hook instead.
     let options = NativeOptions {
-        android_app: Some(app),
+        event_loop_builder: Some(Box::new(move |builder| {
+            builder.with_android_app(app);
+        })),
         renderer: Renderer::Glow,
         ..Default::default()
     };
