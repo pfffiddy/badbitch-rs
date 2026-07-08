@@ -1,0 +1,33 @@
+[package]
+name = "llm-desk-android"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+name = "llm_desk_android"
+crate-type = ["cdylib"]
+
+[dependencies]
+llm-desk-core = { path = "../../core" }
+llm-desk-ui = { path = "../../ui" }
+# Same UI crate as the desktop; eframe's Android backend (GameActivity).
+eframe = { version = "0.29", default-features = false, features = [
+    "glow",              # GLES renderer — works on the K51's PowerVR GE8320
+    "default_fonts",
+    "android-game-activity",
+] }
+android-activity = { version = "0.6", features = ["game-activity"] }
+log = "0.4"
+android_logger = "0.14"
+# Call into the Java Activity (to open the system file picker) and receive the
+# picked file's path back via a JNI callback.
+jni = "0.21"
+ndk-context = "0.1"
+
+# Standalone on purpose: keeps the Android-only eframe features from
+# unifying into the desktop build via the workspace.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "thin"

@@ -1,0 +1,9 @@
+[package]
+name = "llm-desk"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+llm-desk-core = { path = "../core" }
+llm-desk-ui = { path = "../ui" }
+eframe = "0.29"
