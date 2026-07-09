@@ -42,4 +42,7 @@ dependencies {
     // which vendors the GameActivity 2.0.2 native glue.
     implementation("androidx.games:games-activity:2.0.2")
     implementation("androidx.core:core-ktx:1.13.1")
+    // GameActivity extends AppCompatActivity, so appcompat must be on the
+    // classpath (and an AppCompat theme applied — see AndroidManifest).
+    implementation("androidx.appcompat:appcompat:1.7.0")
 }

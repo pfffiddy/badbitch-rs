@@ -10,7 +10,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|smallestScreenSize"
             android:windowSoftInputMode="adjustResize">
             <!-- GameActivity loads lib{value}.so -->
